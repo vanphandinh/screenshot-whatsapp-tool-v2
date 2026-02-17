@@ -1,0 +1,55 @@
+/* Element Picker Overlay Styles */
+.dom-capture-picker-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2147483646;
+  cursor: crosshair;
+  pointer-events: none;
+}
+
+.dom-capture-picker-highlight {
+  position: absolute;
+  border: 2px solid #4FC3F7;
+  background: rgba(79, 195, 247, 0.15);
+  z-index: 2147483647;
+  pointer-events: none;
+  border-radius: 3px;
+  transition: all 0.1s ease;
+}
+
+.dom-capture-picker-tooltip {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 13px;
+  z-index: 2147483647;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  max-width: 600px;
+  text-align: center;
+}
+
+.dom-capture-picker-tooltip code {
+  color: #4FC3F7;
+  background: rgba(79, 195, 247, 0.1);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+}
+
+.dom-capture-picker-tooltip .hint {
+  color: #aaa;
+  font-size: 11px;
+  margin-top: 4px;
+}

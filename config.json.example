@@ -1,0 +1,7 @@
+{
+    "phone_number": "111111111111111111@g.us",
+    "wpp_base_url": "https://your-wppconnect-server.com",
+    "wpp_session": "default_session",
+    "wpp_secret_key": "YOUR_SECRET_KEY_HERE",
+    "max_retention_days": 3
+}

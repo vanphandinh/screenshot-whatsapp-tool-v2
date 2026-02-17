@@ -1,0 +1,23 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# --- Project Specific ---
+screenshots/*.png
+!screenshots/.gitkeep
+
+# --- Configuration (Sensitive) ---
+# Better to ignore and provide config.example.json
+config.json
+
+# --- IDEs ---
+.vscode/
+.idea/
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store

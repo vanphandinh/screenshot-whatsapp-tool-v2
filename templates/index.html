@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WPPConnect Session Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px rgba(255, 255, 255, 0.1) solid;
+            border-radius: 1.5rem;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .pulse-green {
+            background-color: #10b981;
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            }
+
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+            }
+
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+    </style>
+</head>
+
+<body class="p-4 md:p-8">
+    <div class="max-w-4xl mx-auto">
+        <header class="mb-12 text-center">
+            <h1
+                class="text-4xl md:text-5xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500">
+                WPPConnect Manager
+            </h1>
+            <p class="text-slate-400">Initialize and connect your WhatsApp Session</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Configuration -->
+            <div class="glass p-8">
+                <h2 class="text-xl font-semibold mb-6 flex items-center">
+                    <span class="mr-2">⚙️</span> Server Configuration
+                </h2>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Base URL</label>
+                        <input type="text" id="baseUrl" value="{{ config.wpp_base_url }}"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Session Name</label>
+                        <input type="text" id="sessionName" value="{{ config.wpp_session }}"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Secret Key (Token)</label>
+                        <input type="password" id="secretKey" value="{{ config.wpp_secret_key }}"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <button onclick="saveConfig()"
+                        class="w-full bg-indigo-600 hover:bg-indigo-700 transition-colors py-2 rounded-lg font-semibold mt-4">
+                        Save Configuration
+                    </button>
+                    <button onclick="startSession()"
+                        class="w-full bg-blue-600 hover:bg-blue-700 transition-colors py-2 rounded-lg font-semibold">
+                        Initialize Session
+                    </button>
+                    <button id="logoutBtn" onclick="logoutSession()"
+                        class="w-full bg-red-600 hover:bg-red-700 transition-colors py-2 rounded-lg font-semibold hidden">
+                        Logout Session
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status & QR -->
+            <div class="glass p-8 flex flex-col items-center justify-center text-center">
+                <div id="statusArea" class="mb-6">
+                    <span id="statusDot" class="status-dot bg-slate-500"></span>
+                    <span id="statusText" class="ml-2 font-medium text-slate-300">Checking...</span>
+                </div>
+
+                <div id="qrContainer" class="bg-white p-4 rounded-xl hidden">
+                    <img id="qrImage" src="" alt="QR Code" class="w-48 h-48">
+                </div>
+
+                <div id="loadingPlaceholder"
+                    class="w-48 h-48 bg-slate-800 rounded-xl flex items-center justify-center text-slate-500 italic">
+                    No QR code yet
+                </div>
+
+                <p id="instruction" class="mt-6 text-sm text-slate-400">
+                    Enter info and press "Initialize" to get QR code
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pollingInterval = null;
+
+        async function saveConfig() {
+            const data = {
+                wpp_base_url: document.getElementById('baseUrl').value,
+                wpp_session: document.getElementById('sessionName').value,
+                wpp_secret_key: document.getElementById('secretKey').value
+            };
+            await fetch('/api/save-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            alert('Configuration saved!');
+        }
+
+        async function startSession() {
+            const session = document.getElementById('sessionName').value;
+            const base_url = document.getElementById('baseUrl').value;
+            const secret_key = document.getElementById('secretKey').value;
+
+            // Reset UI for start
+            document.getElementById('statusText').innerText = 'Initializing...';
+            document.getElementById('qrContainer').classList.add('hidden');
+            document.getElementById('loadingPlaceholder').classList.remove('hidden');
+            document.getElementById('loadingPlaceholder').innerText = 'Generating QR code...';
+
+            try {
+                const response = await fetch('/api/session/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session, base_url, secret_key })
+                });
+
+                const result = await response.json();
+                console.log('Start Result:', result);
+
+                startPollingStatus();
+            } catch (e) {
+                console.error('Start error:', e);
+                document.getElementById('statusText').innerText = 'Init Error';
+            }
+        }
+
+        function startPollingStatus() {
+            if (pollingInterval) clearInterval(pollingInterval);
+            poll();
+            pollingInterval = setInterval(poll, 3000);
+        }
+
+        function stopPollingStatus() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        async function poll() {
+            const session = document.getElementById('sessionName').value;
+            const base_url = document.getElementById('baseUrl').value;
+            const secret_key = document.getElementById('secretKey').value;
+            const timestamp = new Date().getTime();
+
+            if (!session || !base_url) return;
+
+            try {
+                // Check Status with cache-busting
+                const statusRes = await fetch(`/api/session/status?session=${session}&base_url=${base_url}&secret_key=${secret_key}&t=${timestamp}`);
+
+                if (statusRes.status === 404 || statusRes.status === 401) {
+                    // Session not found or Unauthorized (likely token/session gone)
+                    const statusText = document.getElementById('statusText');
+                    statusText.innerText = 'Not initialized';
+                    statusText.className = 'ml-2 font-medium text-slate-300';
+                    document.getElementById('statusDot').className = 'status-dot bg-slate-500';
+                    document.getElementById('logoutBtn').classList.add('hidden');
+                    return;
+                }
+
+                const statusData = await statusRes.json();
+                const statusText = document.getElementById('statusText');
+                const statusDot = document.getElementById('statusDot');
+                const qrContainer = document.getElementById('qrContainer');
+                const placeholder = document.getElementById('loadingPlaceholder');
+                const instruction = document.getElementById('instruction');
+                const logoutBtn = document.getElementById('logoutBtn');
+
+                const currentState = statusData.status || statusData.state || statusData.statusSession;
+
+                if (currentState === 'CONNECTED') {
+                    statusText.innerText = 'Connected';
+                    statusText.className = 'ml-2 font-medium text-emerald-400';
+                    statusDot.className = 'status-dot pulse-green';
+                    qrContainer.classList.add('hidden');
+                    placeholder.classList.remove('hidden');
+                    placeholder.innerText = '✓ Connected';
+                    instruction.innerText = 'Your account is ready!';
+                    logoutBtn.classList.remove('hidden');
+                    stopPollingStatus();
+                } else if (currentState === 'INITIALIZING' || currentState === 'STARTING') {
+                    statusText.innerText = 'Initializing...';
+                    statusDot.className = 'status-dot bg-blue-500';
+                    logoutBtn.classList.add('hidden');
+                } else if (currentState === 'QRCODE' || currentState === 'DISCONNECTED') {
+                    statusText.innerText = 'Waiting for QR scan...';
+                    statusDot.className = 'status-dot bg-yellow-500';
+                    logoutBtn.classList.add('hidden');
+
+                    // Fetch QR
+                    const qrRes = await fetch(`/api/session/qr?session=${session}&base_url=${base_url}&secret_key=${secret_key}&t=${timestamp}`);
+                    const qrData = await qrRes.json();
+
+                    if (qrData.qrcode || qrData.base64) {
+                        const qrSrc = qrData.base64 || qrData.qrcode;
+                        document.getElementById('qrImage').src = qrSrc;
+                        qrContainer.classList.remove('hidden');
+                        placeholder.classList.add('hidden');
+                        instruction.innerText = 'Please scan the QR code with WhatsApp on your phone';
+                    }
+                } else {
+                    // Other states (CLOSED, etc.)
+                    statusText.innerText = 'Disconnected (' + currentState + ')';
+                    statusText.className = 'ml-2 font-medium text-slate-300';
+                    statusDot.className = 'status-dot bg-slate-500';
+                    logoutBtn.classList.add('hidden');
+                }
+            } catch (e) {
+                console.error('Polling error:', e);
+            }
+        }
+
+        async function logoutSession() {
+            if (!confirm('Are you sure you want to logout and close this session?')) return;
+
+            const session = document.getElementById('sessionName').value;
+            const base_url = document.getElementById('baseUrl').value;
+            const secret_key = document.getElementById('secretKey').value;
+
+            try {
+                stopPollingStatus();
+
+                const response = await fetch('/api/session/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session, base_url, secret_key })
+                });
+
+                const result = await response.json();
+                console.log('Logout Result:', result);
+
+                // Reset UI
+                document.getElementById('statusText').innerText = 'Logged out';
+                document.getElementById('statusText').className = 'ml-2 font-medium text-slate-300';
+                document.getElementById('statusDot').className = 'status-dot bg-slate-500';
+                document.getElementById('logoutBtn').classList.add('hidden');
+                document.getElementById('qrContainer').classList.add('hidden');
+                document.getElementById('loadingPlaceholder').classList.remove('hidden');
+                document.getElementById('loadingPlaceholder').innerText = 'No QR code yet';
+                document.getElementById('instruction').innerText = 'Enter info and press "Initialize" to get QR code';
+
+                alert('Logged out successfully!');
+            } catch (e) {
+                console.error('Logout error:', e);
+                alert('Error logging out: ' + e.message);
+            }
+        }
+
+        // Auto-start check on load
+        window.addEventListener('DOMContentLoaded', () => {
+            const session = document.getElementById('sessionName').value;
+            const base_url = document.getElementById('baseUrl').value;
+            if (session && base_url) {
+                console.log('Auto-checking status for:', session);
+                startPollingStatus();
+            }
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="popup.css">
+    <title>DOM Data Capture</title>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <h1>DOM Capture</h1>
+            </div>
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span class="status-text">Offline</span>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="selectors">📋 Selectors</button>
+            <button class="tab" data-tab="settings">⚙️ Settings</button>
+            <button class="tab" data-tab="logs">📊 Logs</button>
+        </nav>
+
+        <!-- Tab: Selectors -->
+        <section class="tab-content active" id="tab-selectors">
+            <div class="selector-list" id="selectorList">
+                <!-- Dynamic selector rows -->
+            </div>
+            <div class="add-row">
+                <input type="text" id="newFieldName" placeholder="Tên trường (VD: DC, AWS...)" class="input-sm">
+                <button class="btn btn-accent" id="btnAddField">+ Thêm</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="preview-section">
+                <div class="section-title">
+                    <span>👁️ Live Preview</span>
+                    <button class="btn btn-ghost btn-sm" id="btnRefreshPreview">🔄 Refresh</button>
+                </div>
+                <div class="preview-grid" id="previewGrid">
+                    <div class="preview-empty">Chưa có dữ liệu. Click "Refresh" để xem.</div>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- Schedule Status -->
+            <div class="schedule-panel" id="schedulePanel">
+                <div class="section-title">
+                    <span>📅 Lịch chạy tự động</span>
+                </div>
+                <div class="schedule-info" id="scheduleInfo">
+                    <div class="schedule-row">
+                        <span class="schedule-label">Trạng thái:</span>
+                        <span class="schedule-value" id="scheduleStatus">—</span>
+                    </div>
+                    <div class="schedule-row">
+                        <span class="schedule-label">Lần chạy tiếp:</span>
+                        <span class="schedule-value" id="scheduleNextRun">—</span>
+                    </div>
+                    <div class="schedule-row">
+                        <span class="schedule-label">Kết quả lần trước:</span>
+                        <span class="schedule-value" id="scheduleLastResult">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-bar-dual">
+                <button class="btn btn-secondary btn-sm" id="btnTestNormal">
+                    🚀 Test thường
+                </button>
+                <button class="btn btn-accent btn-sm" id="btnTest22h">
+                    🌙 Test báo cáo 22h
+                </button>
+            </div>
+        </section>
+
+        <!-- Tab: Settings -->
+        <section class="tab-content" id="tab-settings">
+            <div class="form-group">
+                <label>🌐 URL Website mục tiêu</label>
+                <input type="url" id="inputTargetUrl" placeholder="https://monitoring.example.com/dashboard"
+                    class="input">
+                <small class="help-text">Extension sẽ tìm tab mở URL này để bắt dữ liệu</small>
+            </div>
+
+            <div class="form-group">
+                <label>🖥️ Server URL</label>
+                <input type="url" id="inputServerUrl" placeholder="http://localhost:5001" class="input"
+                    value="http://localhost:5001">
+                <div class="server-status" id="serverStatus">
+                    <span class="status-dot offline"></span>
+                    <span>Chưa kiểm tra</span>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="btnCheckServer">Kiểm tra kết nối</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="form-group">
+                <label>⏱️ Chế độ tự động</label>
+                <div class="toggle-row">
+                    <label class="switch">
+                        <input type="checkbox" id="toggleAutoCapture">
+                        <span class="slider"></span>
+                    </label>
+                    <span id="autoCaptureLabel">Tắt</span>
+                </div>
+                <small class="help-text">Chạy mỗi giờ tại phút ngẫu nhiên 0-10. Retry sau 5 phút nếu thất bại.</small>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn btn-primary" id="btnSaveSettings">💾 Lưu cài đặt</button>
+            </div>
+        </section>
+
+        <!-- Tab: Logs -->
+        <section class="tab-content" id="tab-logs">
+            <div class="log-header">
+                <span>📋 Lịch sử</span>
+                <button class="btn btn-ghost btn-sm" id="btnClearLogs">🗑️ Xóa logs</button>
+            </div>
+            <div class="log-list" id="logList">
+                <div class="log-empty">Chưa có log nào.</div>
+            </div>
+        </section>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
