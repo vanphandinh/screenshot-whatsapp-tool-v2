@@ -49,86 +49,91 @@ async function saveScheduleState(state) {
 // ─── Scheduling logic (mirrors main.py) ───
 
 /**
- * Pick a random minute between 0 and 10 for the next hour.
- * Returns delay in minutes from now.
+ * Succces -> next hour at random second between 0 and 600 (0-10 min)
+ * Failure -> retry in 5 minutes
+ * Returns absolute Date object.
  */
-function computeNextRunDelay(success) {
+function computeNextRunTime(success) {
     const now = new Date();
 
     if (!success) {
-        // Failed → retry in 5 minutes
-        return 5;
+        // Failed → retry in 5 minutes (precise)
+        return new Date(now.getTime() + 5 * 60000);
     }
 
-    // Success → next hour at random minute 0-10
-    const randomMinute = Math.floor(Math.random() * 11); // 0-10
+    // Success → calculate start of next hour
     const nextRun = new Date(now);
     nextRun.setHours(nextRun.getHours() + 1);
-    nextRun.setMinutes(randomMinute);
+    nextRun.setMinutes(0);
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
 
-    const delayMs = nextRun.getTime() - now.getTime();
-    return Math.max(1, Math.round(delayMs / 60000)); // at least 1 minute
+    // Add random 0-600 seconds (0 to 10 minutes)
+    const randomSeconds = Math.floor(Math.random() * 601);
+    return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 
 /**
- * Compute the first run delay (same logic as main.py).
- * If current minute < 10, pick a random minute between (current+1) and 10.
- * Otherwise, pick next hour random 0-10.
+ * Compute the first run time.
+ * If current minute < 10, pick a random second between (now + 30s) and the 10-minute mark.
+ * Otherwise, pick next hour random 0-10 minutes (0-600s).
+ * Returns absolute Date object.
  */
-function computeFirstRunDelay() {
+function computeFirstRunTime() {
     const now = new Date();
     const currentMinute = now.getMinutes();
 
-    let nextRun;
     if (currentMinute < 10) {
-        const startMin = currentMinute + 1;
-        const randomMinute = startMin + Math.floor(Math.random() * (11 - startMin));
-        nextRun = new Date(now);
-        nextRun.setMinutes(randomMinute);
-        nextRun.setSeconds(0);
-        nextRun.setMilliseconds(0);
-    } else {
-        // Too late for this hour, schedule next hour
-        const randomMinute = Math.floor(Math.random() * 11);
-        nextRun = new Date(now);
-        nextRun.setHours(nextRun.getHours() + 1);
-        nextRun.setMinutes(randomMinute);
-        nextRun.setSeconds(0);
-        nextRun.setMilliseconds(0);
+        // Still within the 10-minute window of the current hour
+        const startOfTenMinMark = new Date(now);
+        startOfTenMinMark.setMinutes(10);
+        startOfTenMinMark.setSeconds(0);
+        startOfTenMinMark.setMilliseconds(0);
+
+        const minTime = now.getTime() + 30000; // current time + 30 seconds
+        const maxTime = startOfTenMinMark.getTime();
+
+        if (minTime < maxTime) {
+            const randomTime = minTime + Math.random() * (maxTime - minTime);
+            return new Date(randomTime);
+        }
     }
 
-    const delayMs = nextRun.getTime() - now.getTime();
-    return {
-        delayMinutes: Math.max(1, Math.round(delayMs / 60000)),
-        nextRunTime: nextRun.toISOString()
-    };
+    // Too late for this hour (or < 30s left), schedule next hour 0-10 min window
+    const nextRun = new Date(now);
+    nextRun.setHours(nextRun.getHours() + 1);
+    nextRun.setMinutes(0);
+    nextRun.setSeconds(0);
+    nextRun.setMilliseconds(0);
+
+    const randomSeconds = Math.floor(Math.random() * 601);
+    return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 
 // ─── Schedule next capture alarm ───
 async function scheduleNext(success, reason) {
-    const delayMinutes = success !== null
-        ? computeNextRunDelay(success)
-        : computeFirstRunDelay().delayMinutes;
+    const nextRun = success !== null
+        ? computeNextRunTime(success)
+        : computeFirstRunTime();
 
-    const nextRunTime = new Date(Date.now() + delayMinutes * 60000).toISOString();
+    const nextRunISO = nextRun.toISOString();
 
     await chrome.alarms.clear('dom-capture-scheduled');
     chrome.alarms.create('dom-capture-scheduled', {
-        delayInMinutes: delayMinutes
+        when: nextRun.getTime()
     });
 
     const state = {
         status: success === null ? 'scheduled' : (success ? 'success' : 'retrying'),
-        nextRun: nextRunTime,
+        nextRun: nextRunISO,
         lastResult: reason || null,
         lastRunTime: success !== null ? new Date().toISOString() : null
     };
 
     await saveScheduleState(state);
 
-    console.log(`[DOMCapture] ${success === null ? 'First run' : (success ? 'Next run' : 'Retry')} scheduled in ${delayMinutes} min → ${nextRunTime}`);
+    const diffSecs = Math.round((nextRun.getTime() - Date.now()) / 1000);
+    console.log(`[DOMCapture] ${success === null ? 'First run' : (success ? 'Next run' : 'Retry')} scheduled in ${diffSecs}s → ${nextRunISO}`);
     return state;
 }
 
@@ -325,10 +330,10 @@ async function startScheduler() {
         return;
     }
 
-    const { delayMinutes, nextRunTime } = computeFirstRunDelay();
-    console.log(`[DOMCapture] Scheduler started. First run in ${delayMinutes} min at ${nextRunTime}`);
+    const nextRun = computeFirstRunTime();
+    console.log(`[DOMCapture] Scheduler started. First run at ${nextRun.toISOString()}`);
     await scheduleNext(null, 'Scheduler started');
-    await addCaptureLog('info', `Scheduler started. First run at ${new Date(nextRunTime).toLocaleTimeString('vi-VN')}`);
+    await addCaptureLog('info', `Scheduler started. First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
 }
 
 // ─── Stop scheduling ───
@@ -344,18 +349,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'CAPTURE_NOW') {
         // Manual capture — add 500ms delay to allow popup to close
         const force22h = msg.force22h || false;
-        setTimeout(() => {
-            captureData(force22h).then(result => {
-                chrome.storage.local.set({
-                    lastCapture: { time: new Date().toISOString(), result }
-                });
-                if (result.success) {
-                    addCaptureLog('success', 'Capture thủ công thành công.');
-                } else {
-                    addCaptureLog('error', `Capture thủ công thất bại: ${result.error}`);
-                }
-                sendResponse(result);
+        setTimeout(async () => {
+            const result = await captureData(force22h);
+            chrome.storage.local.set({
+                lastCapture: { time: new Date().toISOString(), result }
             });
+            if (result.success) {
+                addCaptureLog('success', 'Capture thủ công thành công.');
+            } else {
+                addCaptureLog('error', `Capture thủ công thất bại: ${result.error}`);
+            }
+            sendResponse(result);
         }, 500);
         return true;
     }

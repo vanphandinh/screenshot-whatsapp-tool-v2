@@ -231,9 +231,29 @@ function renderPreview(data) {
 
 // ─── Capture Now (manual test) ───
 async function captureNow(force22h = false) {
-    // Send message and close immediately so high-res screenshot doesn't catch the popup
-    sendMsg({ type: 'CAPTURE_NOW', force22h });
-    window.close();
+    const btnId = force22h ? 'btnTest22h' : 'btnTestNormal';
+    const btn = document.getElementById(btnId);
+
+    if (btn) btn.classList.add('loading');
+
+    try {
+        // --- Fix: Check server status BEFORE sending message and closing popup ---
+        const isOnline = await checkServerStatus();
+        if (!isOnline) {
+            alert('Không thể kết nối đến server. Vui lòng bật server và thử lại.');
+            if (btn) btn.classList.remove('loading');
+            return;
+        }
+
+        // Server is online, proceed with capture
+        sendMsg({ type: 'CAPTURE_NOW', force22h });
+
+        // Wait 200ms just to ensure the message is sent before closing
+        setTimeout(() => window.close(), 200);
+    } catch (err) {
+        alert('Lỗi: ' + err.message);
+        if (btn) btn.classList.remove('loading');
+    }
 }
 
 // ─── Refresh Schedule Status ───
@@ -277,15 +297,36 @@ async function refreshScheduleStatus() {
 
 // ─── Save Settings ───
 async function saveSettings() {
-    config.targetUrl = document.getElementById('inputTargetUrl').value.trim();
-    config.serverUrl = document.getElementById('inputServerUrl').value.trim();
+    const targetUrl = document.getElementById('inputTargetUrl').value.trim();
+    const serverUrl = document.getElementById('inputServerUrl').value.trim();
+    const autoCapture = document.getElementById('toggleAutoCapture').checked;
+
+    if (autoCapture) {
+        const isOnline = await checkServerStatus();
+        if (!isOnline) {
+            alert('Không thể bật chế độ tự động vì server chưa chạy.');
+            document.getElementById('toggleAutoCapture').checked = false;
+            document.getElementById('autoCaptureLabel').textContent = 'Tắt';
+            return;
+        }
+    }
+
+    config.targetUrl = targetUrl;
+    config.serverUrl = serverUrl;
     config.autoCapture = document.getElementById('toggleAutoCapture').checked;
 
     await saveConfigToBackground();
     addLog('success', 'Cài đặt đã được lưu');
 
-    // Refresh schedule display after save
-    setTimeout(() => refreshScheduleStatus(), 500);
+    // If autoCapture was just turned ON, update badge immediately
+    if (autoCapture) {
+        updateStatusBadge(true);
+    } else {
+        updateStatusBadge(false);
+    }
+
+    // Refresh schedule display after save (which will also call updateStatusBadge)
+    setTimeout(() => refreshScheduleStatus(), 800);
 }
 
 // ─── Save config to background ───
@@ -296,19 +337,23 @@ async function saveConfigToBackground() {
 // ─── Check Server Status ───
 async function checkServerStatus() {
     const statusEl = document.getElementById('serverStatus');
-    const serverUrl = document.getElementById('inputServerUrl').value.trim();
+    const serverUrlInput = document.getElementById('inputServerUrl');
+    const serverUrl = (serverUrlInput ? serverUrlInput.value : config.serverUrl).trim();
 
-    statusEl.innerHTML = '<span class="status-dot"></span> Đang kiểm tra...';
+    if (statusEl) statusEl.innerHTML = '<span class="status-dot"></span> Đang kiểm tra...';
 
     try {
-        const res = await fetch(`${serverUrl}/api/status`, { method: 'GET', signal: AbortSignal.timeout(5000) });
+        const res = await fetch(`${serverUrl}/api/status`, { method: 'GET', signal: AbortSignal.timeout(3000) });
         if (res.ok) {
-            statusEl.innerHTML = '<span class="status-dot online"></span> Server đang chạy';
+            if (statusEl) statusEl.innerHTML = '<span class="status-dot online"></span> Server đang chạy';
+            return true;
         } else {
-            statusEl.innerHTML = '<span class="status-dot offline"></span> Server lỗi: ' + res.status;
+            if (statusEl) statusEl.innerHTML = '<span class="status-dot offline"></span> Server lỗi: ' + res.status;
+            return false;
         }
     } catch {
-        statusEl.innerHTML = '<span class="status-dot offline"></span> Không thể kết nối';
+        if (statusEl) statusEl.innerHTML = '<span class="status-dot offline"></span> Không thể kết nối';
+        return false;
     }
 }
 
@@ -368,9 +413,18 @@ function clearLogs() {
 // ─── Helper: Send message to background ───
 function sendMsg(msg) {
     return new Promise((resolve) => {
-        chrome.runtime.sendMessage(msg, (response) => {
-            resolve(response);
-        });
+        try {
+            chrome.runtime.sendMessage(msg, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Popup] Message error:', chrome.runtime.lastError.message);
+                    resolve({ success: false, error: chrome.runtime.lastError.message });
+                } else {
+                    resolve(response);
+                }
+            });
+        } catch (err) {
+            resolve({ success: false, error: err.message });
+        }
     });
 }
 
