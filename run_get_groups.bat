@@ -1,20 +1,28 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+title WhatsApp Tool - Get Groups
+cd /d %~dp0
 
-if not exist venv (
-    echo [!] Virtual environment not found. Please run setup_env.bat first.
+echo ================================================
+echo  WhatsApp Group Viewer
+echo ================================================
+echo.
+
+if exist venv (
+    echo [*] Activating virtual environment...
+    call venv\Scripts\activate.bat
+) else (
+    echo [!] Virtual environment not found. Please run setup_env.bat.
     pause
     exit /b
 )
 
-echo [*] Activating virtual environment...
-call venv\Scripts\activate.bat
-
+echo.
 echo [*] Fetching WhatsApp groups...
 python get_groups.py
 
 echo.
+echo ================================================
 echo Press any key to exit...
 pause > nul
-deactivate
+exit
