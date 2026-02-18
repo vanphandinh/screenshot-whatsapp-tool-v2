@@ -219,6 +219,9 @@ async function captureData(force22h = false) {
         // 3. Wait 1 second for the OS/Window to settle and come to front
         await new Promise(r => setTimeout(r, 1000));
 
+        // --- NEW: Freeze the page before extraction ---
+        await chrome.tabs.sendMessage(tab.id, { type: 'FREEZE_PAGE' });
+
         // Extract data from selectors
         const response = await chrome.tabs.sendMessage(tab.id, {
             type: 'EXTRACT_DATA',
@@ -226,10 +229,18 @@ async function captureData(force22h = false) {
         });
 
         if (!response || !response.ok) {
+            // Reload page even on extraction error
+            try {
+                console.log('[DOMCapture] Extraction failed, reloading tab:', tab.id);
+                await chrome.tabs.update(tab.id, { url: tab.url });
+                console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
+            } catch (err) {
+                console.log('[DOMCapture] Could not reload tab:', err.message);
+            }
             return { success: false, error: 'Failed to extract data from page' };
         }
 
-        // Send data to local server (screenshot is taken server-side)
+        // Prepare payload for server
         const payload = {
             timestamp: new Date().toISOString(),
             url: config.targetUrl,
@@ -237,11 +248,40 @@ async function captureData(force22h = false) {
             force_22h: force22h
         };
 
+        // Send extracted data to server for processing and screenshot
         const result = await sendToServer(config.serverUrl, payload);
+
+        // --- NEW: Reload page after completion using chrome.tabs.update() ---
+        console.log('[DOMCapture] Reloading tab:', tab.id);
+        try {
+            await chrome.tabs.update(tab.id, { url: tab.url });
+            console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
+        } catch (err) {
+            console.log('[DOMCapture] Could not reload tab via chrome.tabs.update():', err.message);
+            // Fallback: Try message-based reload
+            try {
+                const reloadResponse = await chrome.tabs.sendMessage(tab.id, { type: 'RELOAD_PAGE' });
+                console.log('[DOMCapture] Fallback reload response received:', reloadResponse);
+            } catch (msgErr) {
+                console.log('[DOMCapture] Fallback reload also failed:', msgErr.message);
+            }
+        }
+
         return result;
 
     } catch (err) {
         console.error('[DOMCapture] Capture error:', err);
+        // Try to reload page on error
+        try {
+            const tab = await getTargetTab(config.targetUrl);
+            if (tab) {
+                console.log('[DOMCapture] Error occurred, reloading tab:', tab.id);
+                await chrome.tabs.update(tab.id, { url: tab.url });
+                console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
+            }
+        } catch (reloadErr) {
+            console.log('[DOMCapture] Could not reload on error:', reloadErr);
+        }
         return { success: false, error: err.message };
     }
 }

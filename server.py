@@ -204,16 +204,18 @@ def status():
 def capture():
     """
     Receives captured data from Chrome extension.
+    Takes screenshot, processes data, and sends via WhatsApp.
     Expected payload:
     {
         "timestamp": "ISO string",
         "url": "source URL",
+        "force_22h": bool,
         "data": {
             "DC": {"value": "12", "found": true},
             "AWS": {"value": "5.3", "found": true},
             "TAP": {"value": "-2.1", "found": true},
             ...
-        },
+        }
     }
     """
     try:
@@ -225,7 +227,7 @@ def capture():
         data = payload.get('data', {})
 
         log("=" * 40, "INFO")
-        log(f"Received capture from extension at {payload.get('timestamp', 'unknown')}", "ACTION")
+        log(f"Received capture at {payload.get('timestamp', 'unknown')}", "ACTION")
         log(f"Source URL: {payload.get('url', 'unknown')}", "DEBUG")
 
         # Log extracted values
@@ -235,7 +237,8 @@ def capture():
             status_icon = "✅" if found else "❌"
             log(f"  {status_icon} {name}: {val}", "DEBUG")
 
-        # Take full-screen screenshot (server-side)
+        # Take full-screen screenshot
+        log("Capturing full-screen screenshot...", "INFO")
         screenshot_path = take_fullscreen_screenshot()
 
         # Extract values
@@ -308,6 +311,7 @@ def capture():
         if screenshot_path:
             send_success = client.send_image(config['phone_number'], screenshot_path, caption)
         else:
+            log("No screenshot available, sending text only", "INFO")
             send_success = client.send_text(config['phone_number'], caption)
 
         if send_success:
