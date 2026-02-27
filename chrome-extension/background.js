@@ -15,6 +15,57 @@ const DEFAULT_CONFIG = {
     retryMinutes: 5
 };
 
+const BLOCK_RULE_ID = 9999;
+
+// ─── Block all network requests to target domain ───
+async function blockTargetNetwork(targetUrl) {
+    try {
+        const url = new URL(targetUrl);
+        // Use hostname only and wildcard to match any port
+        const urlFilter = `*://${url.hostname}*`;
+
+        // Remove any existing rule first
+        await chrome.declarativeNetRequest.updateDynamicRules({
+            removeRuleIds: [BLOCK_RULE_ID]
+        });
+
+        // Add blocking rule
+        await chrome.declarativeNetRequest.updateDynamicRules({
+            addRules: [{
+                id: BLOCK_RULE_ID,
+                priority: 1,
+                action: { type: 'block' },
+                condition: {
+                    urlFilter: urlFilter,
+                    resourceTypes: [
+                        'xmlhttprequest', 'websocket', 'other',
+                        'sub_frame', 'stylesheet', 'script',
+                        'image', 'font', 'media', 'ping'
+                    ]
+                }
+            }]
+        });
+
+        console.log(`[DOMCapture] Network BLOCKED for ${url.hostname}`);
+        return true;
+    } catch (err) {
+        console.error('[DOMCapture] Failed to block network:', err);
+        return false;
+    }
+}
+
+// ─── Unblock network requests ───
+async function unblockTargetNetwork() {
+    try {
+        await chrome.declarativeNetRequest.updateDynamicRules({
+            removeRuleIds: [BLOCK_RULE_ID]
+        });
+        console.log('[DOMCapture] Network UNBLOCKED');
+    } catch (err) {
+        console.error('[DOMCapture] Failed to unblock network:', err);
+    }
+}
+
 // ─── Get config from storage ───
 async function getConfig() {
     return new Promise((resolve) => {
@@ -206,7 +257,6 @@ async function captureData(force22h = false) {
 
         await ensureContentScript(tab.id);
 
-        // --- NEW: Focus window and Tab before screenshot ---
         // 1. Focus the window and maximize it
         await chrome.windows.update(tab.windowId, {
             focused: true,
@@ -219,8 +269,11 @@ async function captureData(force22h = false) {
         // 3. Wait 1 second for the OS/Window to settle and come to front
         await new Promise(r => setTimeout(r, 1000));
 
-        // --- NEW: Freeze the page before extraction ---
-        await chrome.tabs.sendMessage(tab.id, { type: 'FREEZE_PAGE' });
+        // 4. Block network to prevent data updates during capture
+        await blockTargetNetwork(config.targetUrl);
+
+        // 5. Wait 2 seconds for in-flight requests to settle
+        await new Promise(r => setTimeout(r, 2000));
 
         // Extract data from selectors
         const response = await chrome.tabs.sendMessage(tab.id, {
@@ -229,11 +282,11 @@ async function captureData(force22h = false) {
         });
 
         if (!response || !response.ok) {
-            // Reload page even on extraction error
+            // Unblock network and reload on extraction error
+            await unblockTargetNetwork();
             try {
                 console.log('[DOMCapture] Extraction failed, reloading tab:', tab.id);
                 await chrome.tabs.update(tab.id, { url: tab.url });
-                console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
             } catch (err) {
                 console.log('[DOMCapture] Could not reload tab:', err.message);
             }
@@ -251,33 +304,28 @@ async function captureData(force22h = false) {
         // Send extracted data to server for processing and screenshot
         const result = await sendToServer(config.serverUrl, payload);
 
-        // --- NEW: Reload page after completion using chrome.tabs.update() ---
+        // Unblock network and reload page
+        await unblockTargetNetwork();
         console.log('[DOMCapture] Reloading tab:', tab.id);
         try {
             await chrome.tabs.update(tab.id, { url: tab.url });
             console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
         } catch (err) {
-            console.log('[DOMCapture] Could not reload tab via chrome.tabs.update():', err.message);
-            // Fallback: Try message-based reload
-            try {
-                const reloadResponse = await chrome.tabs.sendMessage(tab.id, { type: 'RELOAD_PAGE' });
-                console.log('[DOMCapture] Fallback reload response received:', reloadResponse);
-            } catch (msgErr) {
-                console.log('[DOMCapture] Fallback reload also failed:', msgErr.message);
-            }
+            console.log('[DOMCapture] Could not reload tab:', err.message);
         }
 
         return result;
 
     } catch (err) {
         console.error('[DOMCapture] Capture error:', err);
+        // Always unblock network on error
+        await unblockTargetNetwork();
         // Try to reload page on error
         try {
             const tab = await getTargetTab(config.targetUrl);
             if (tab) {
                 console.log('[DOMCapture] Error occurred, reloading tab:', tab.id);
                 await chrome.tabs.update(tab.id, { url: tab.url });
-                console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
             }
         } catch (reloadErr) {
             console.log('[DOMCapture] Could not reload on error:', reloadErr);
@@ -463,6 +511,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ─── On install/update, auto-start scheduler ───
 chrome.runtime.onInstalled.addListener(async () => {
+    // Cleanup any lingering blocking rules
+    await unblockTargetNetwork();
+
     const config = await getConfig();
     if (!config.selectors) {
         await saveConfig(DEFAULT_CONFIG);
@@ -476,6 +527,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // ─── On browser startup, resume scheduler ───
 chrome.runtime.onStartup.addListener(async () => {
+    // Cleanup any lingering blocking rules
+    await unblockTargetNetwork();
+
     const config = await getConfig();
     if (config.autoCapture) {
         await startScheduler();
