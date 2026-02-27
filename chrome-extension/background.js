@@ -14,55 +14,99 @@ const DEFAULT_CONFIG = {
     autoCapture: true,  // Default ON to match main.py behavior
     retryMinutes: 5
 };
+// ─── Freeze page by injecting into MAIN world ───
+// This function runs in the page's REAL JavaScript context (not isolated world)
+// so it CAN override XMLHttpRequest, fetch, WebSocket etc.
+function freezePageInMainWorld() {
+    if (window.__domCaptureFrozen) return;
+    window.__domCaptureFrozen = true;
 
-const BLOCK_RULE_ID = 9999;
+    // 1. Override XMLHttpRequest.prototype.send — silently fake successful empty responses
+    const originalSend = XMLHttpRequest.prototype.send;
+    const originalOpen = XMLHttpRequest.prototype.open;
 
-// ─── Block all network requests to target domain ───
-async function blockTargetNetwork(targetUrl) {
-    try {
-        const url = new URL(targetUrl);
-        // Use hostname only and wildcard to match any port
-        const urlFilter = `*://${url.hostname}*`;
+    XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
+        this.__dcMethod = method;
+        this.__dcUrl = url;
+        // Still call original open so the object is in proper state
+        return originalOpen.apply(this, arguments);
+    };
 
-        // Remove any existing rule first
-        await chrome.declarativeNetRequest.updateDynamicRules({
-            removeRuleIds: [BLOCK_RULE_ID]
-        });
+    XMLHttpRequest.prototype.send = function (body) {
+        // Fake a successful empty response immediately
+        Object.defineProperty(this, 'readyState', { writable: true, value: 4 });
+        Object.defineProperty(this, 'status', { writable: true, value: 200 });
+        Object.defineProperty(this, 'statusText', { writable: true, value: 'OK' });
+        Object.defineProperty(this, 'responseText', { writable: true, value: '' });
+        Object.defineProperty(this, 'response', { writable: true, value: '' });
 
-        // Add blocking rule
-        await chrome.declarativeNetRequest.updateDynamicRules({
-            addRules: [{
-                id: BLOCK_RULE_ID,
-                priority: 1,
-                action: { type: 'block' },
-                condition: {
-                    urlFilter: urlFilter,
-                    resourceTypes: [
-                        'xmlhttprequest', 'websocket', 'other',
-                        'sub_frame', 'stylesheet', 'script',
-                        'image', 'font', 'media', 'ping'
-                    ]
+        // Dispatch readystatechange and load events so the page thinks everything is fine
+        const self = this;
+        setTimeout(() => {
+            try {
+                self.dispatchEvent(new Event('readystatechange'));
+                self.dispatchEvent(new Event('load'));
+                self.dispatchEvent(new Event('loadend'));
+                if (typeof self.onreadystatechange === 'function') {
+                    self.onreadystatechange(new Event('readystatechange'));
                 }
-            }]
-        });
+                if (typeof self.onload === 'function') {
+                    self.onload(new Event('load'));
+                }
+            } catch (e) { /* ignore */ }
+        }, 10);
+    };
 
-        console.log(`[DOMCapture] Network BLOCKED for ${url.hostname}`);
-        return true;
-    } catch (err) {
-        console.error('[DOMCapture] Failed to block network:', err);
-        return false;
+    // 2. Override fetch — return empty successful response
+    const originalFetch = window.fetch;
+    window.fetch = function () {
+        return Promise.resolve(new Response('', { status: 200, statusText: 'OK' }));
+    };
+
+    // 3. Close existing WebSocket connections and prevent new ones
+    const existingWS = [];
+    const originalWebSocket = window.WebSocket;
+    window.WebSocket = function (url, protocols) {
+        // Create a fake WebSocket-like object that does nothing
+        const fakeWS = {
+            url, readyState: 3, /* CLOSED */
+            send() { },
+            close() { },
+            addEventListener() { },
+            removeEventListener() { },
+            CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3,
+            binaryType: 'blob', bufferedAmount: 0, extensions: '', protocol: ''
+        };
+        return fakeWS;
+    };
+    window.WebSocket.CONNECTING = 0;
+    window.WebSocket.OPEN = 1;
+    window.WebSocket.CLOSING = 2;
+    window.WebSocket.CLOSED = 3;
+
+    // 4. Override EventSource
+    if (window.EventSource) {
+        window.EventSource = function () {
+            return { close() { }, addEventListener() { }, removeEventListener() { } };
+        };
     }
+
+    console.log('[DOM Capture] Page FROZEN in MAIN world — XHR/fetch/WS silently intercepted');
 }
 
-// ─── Unblock network requests ───
-async function unblockTargetNetwork() {
+// Helper: inject freeze into page's main world
+async function injectFreeze(tabId) {
     try {
-        await chrome.declarativeNetRequest.updateDynamicRules({
-            removeRuleIds: [BLOCK_RULE_ID]
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            world: 'MAIN',
+            func: freezePageInMainWorld
         });
-        console.log('[DOMCapture] Network UNBLOCKED');
+        console.log('[DOMCapture] Freeze injected into MAIN world');
+        return true;
     } catch (err) {
-        console.error('[DOMCapture] Failed to unblock network:', err);
+        console.error('[DOMCapture] Failed to inject freeze:', err);
+        return false;
     }
 }
 
@@ -269,11 +313,11 @@ async function captureData(force22h = false) {
         // 3. Wait 1 second for the OS/Window to settle and come to front
         await new Promise(r => setTimeout(r, 1000));
 
-        // 4. Block network to prevent data updates during capture
-        await blockTargetNetwork(config.targetUrl);
+        // 4. Freeze page — inject into MAIN world to silently intercept XHR/fetch/WS
+        await injectFreeze(tab.id);
 
-        // 5. Wait 2 seconds for in-flight requests to settle
-        await new Promise(r => setTimeout(r, 2000));
+        // 5. Wait 1 second for freeze to take effect and last XHR responses to finish
+        await new Promise(r => setTimeout(r, 1000));
 
         // Extract data from selectors
         const response = await chrome.tabs.sendMessage(tab.id, {
@@ -282,11 +326,10 @@ async function captureData(force22h = false) {
         });
 
         if (!response || !response.ok) {
-            // Unblock network and reload on extraction error
-            await unblockTargetNetwork();
+            // Reload page to unfreeze on extraction error
             try {
                 console.log('[DOMCapture] Extraction failed, reloading tab:', tab.id);
-                await chrome.tabs.update(tab.id, { url: tab.url });
+                await chrome.tabs.reload(tab.id);
             } catch (err) {
                 console.log('[DOMCapture] Could not reload tab:', err.message);
             }
@@ -304,12 +347,11 @@ async function captureData(force22h = false) {
         // Send extracted data to server for processing and screenshot
         const result = await sendToServer(config.serverUrl, payload);
 
-        // Unblock network and reload page
-        await unblockTargetNetwork();
+        // Reload page to restore frozen APIs
         console.log('[DOMCapture] Reloading tab:', tab.id);
         try {
-            await chrome.tabs.update(tab.id, { url: tab.url });
-            console.log('[DOMCapture] Tab reload initiated via chrome.tabs.update()');
+            await chrome.tabs.reload(tab.id);
+            console.log('[DOMCapture] Tab reload initiated');
         } catch (err) {
             console.log('[DOMCapture] Could not reload tab:', err.message);
         }
@@ -318,14 +360,12 @@ async function captureData(force22h = false) {
 
     } catch (err) {
         console.error('[DOMCapture] Capture error:', err);
-        // Always unblock network on error
-        await unblockTargetNetwork();
-        // Try to reload page on error
+        // Try to reload page on error (to unfreeze)
         try {
             const tab = await getTargetTab(config.targetUrl);
             if (tab) {
                 console.log('[DOMCapture] Error occurred, reloading tab:', tab.id);
-                await chrome.tabs.update(tab.id, { url: tab.url });
+                await chrome.tabs.reload(tab.id);
             }
         } catch (reloadErr) {
             console.log('[DOMCapture] Could not reload on error:', reloadErr);
@@ -511,9 +551,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ─── On install/update, auto-start scheduler ───
 chrome.runtime.onInstalled.addListener(async () => {
-    // Cleanup any lingering blocking rules
-    await unblockTargetNetwork();
-
     const config = await getConfig();
     if (!config.selectors) {
         await saveConfig(DEFAULT_CONFIG);
@@ -527,9 +564,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // ─── On browser startup, resume scheduler ───
 chrome.runtime.onStartup.addListener(async () => {
-    // Cleanup any lingering blocking rules
-    await unblockTargetNetwork();
-
     const config = await getConfig();
     if (config.autoCapture) {
         await startScheduler();
