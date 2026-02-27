@@ -296,7 +296,7 @@ def capture():
         force_22h = payload.get('force_22h', False)
         current_hour = datetime.now().hour
         if (current_hour == 22 or force_22h) and deg:
-            caption += f" Sản lượng đầu cực đến 22h đạt {deg} MWh."
+            caption += f" Sản lượng đầu cực đến thời điểm hiện tại đạt {deg} MWh."
 
         log(f"Caption: {caption}", "SUCCESS")
 
