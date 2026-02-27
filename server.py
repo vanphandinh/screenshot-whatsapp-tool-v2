@@ -15,8 +15,6 @@ import pyautogui
 import threading
 import pystray
 from PIL import Image
-import ctypes
-import webbrowser
 import tkinter as tk
 from tkinter import scrolledtext
 from queue import Queue
@@ -173,7 +171,7 @@ def take_fullscreen_screenshot():
         # Run cleanup before taking new screenshot
         config = load_config()
         cleanup_old_screenshots(config.get('max_retention_days', 3))
-    except:
+    except Exception:
         pass
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -334,12 +332,6 @@ def capture():
 
 
 # ─── System Tray & GUI Logic ───
-
-import tkinter as tk
-from tkinter import scrolledtext
-import queue
-
-log_queue = queue.Queue()
 
 class LogWindow:
     def __init__(self):
