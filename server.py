@@ -463,7 +463,7 @@ def on_quit(icon, item):
     cleanup_thread.start()
     
     # Give library a very short time to start closing
-    cleanup_thread.join(timeout=3)
+    cleanup_thread.join(timeout=10)
 
     # 3. Force kill any remaining browser processes for this session
     log("Scanning for orphaned browser processes...", "DEBUG")
@@ -519,7 +519,7 @@ def setup_tray():
             
         menu = pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None, enabled=False),
-            pystray.MenuItem("Group IDs", lambda icon, item: show_group_selector()),
+            pystray.MenuItem("Show Group IDs", lambda icon, item: show_group_selector()),
             pystray.MenuItem("Show/Hide Logs", lambda icon, item: log_window.toggle()),
             pystray.MenuItem("Quit", on_quit)
         )
