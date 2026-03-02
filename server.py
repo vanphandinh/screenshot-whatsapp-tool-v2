@@ -3,14 +3,11 @@ Local Python Server — DOM Data Capture
 Receives extracted data from Chrome extension and sends reports via WhatsApp (WPPConnect)
 """
 import os
-import sys
 import json
-import base64
 import time
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests as http_requests
 from WPP_Whatsapp import Create
 import pyautogui
 import threading
@@ -19,6 +16,8 @@ from PIL import Image
 import tkinter as tk
 from tkinter import scrolledtext
 from queue import Queue
+import psutil
+import pyperclip
 
 app = Flask(__name__)
 CORS(app)  # Allow Chrome extension to call this server
@@ -69,39 +68,36 @@ def init_whatsapp():
     except Exception as e:
         log(f"WhatsApp init error: {e}", "ERROR")
 
-def get_group_ids():
+def get_groups():
+    """Fetch groups from WhatsApp and return a list of (name, id) tuples."""
     global whatsapp_client
     if not whatsapp_client or whatsapp_creator.state != 'CONNECTED':
         log("WhatsApp not connected.", "ERROR")
         return []
     
     try:
-        log("Fetching group IDs...", "ACTION")
+        log("Fetching group list...", "ACTION")
         groups = whatsapp_client.getAllGroups()
         results = []
         for g in groups:
             name = g.get('name', 'Unnamed Group')
             gid = g.get('id', {}).get('_serialized', g.get('id', 'N/A'))
-            results.append(f"{name}: {gid}")
+            results.append({"name": name, "id": gid})
         return results
     except Exception as e:
         log(f"Error fetching groups: {e}", "ERROR")
         return []
 
-def copy_groups_to_clipboard():
-    try:
-        import pyperclip
-        groups = get_group_ids()
-        if groups:
-            text = "\n".join(groups)
-            pyperclip.copy(text)
-            log("Group IDs copied to clipboard!", "SUCCESS")
-        else:
-            log("No groups found or not connected.", "WARNING")
-    except ImportError:
-        log("pyperclip not installed. Cannot copy to clipboard.", "ERROR")
-    except Exception as e:
-        log(f"Clipboard error: {e}", "ERROR")
+def show_group_selector():
+    """Fetch groups and show the selection window."""
+    groups = get_groups()
+    if not groups:
+        log("No groups found or not connected.", "WARNING")
+        return
+    
+    # Run UI in the main thread using after()
+    if log_window.root:
+        log_window.root.after(0, lambda: group_window.show(groups))
 
 
 # ─── Full-screen screenshot ───
@@ -318,7 +314,7 @@ class LogWindow:
         self.root.attributes('-toolwindow', True)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
         
-        self.text_area = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        self.text_area = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
         self.text_area.pack(expand=True, fill='both')
         
         self.visible = True
@@ -351,23 +347,165 @@ class LogWindow:
         else:
             self.show()
 
+class GroupWindow:
+    def __init__(self):
+        self.root = None
+        self.frame = None
+
+    def create(self):
+        if self.root:
+            return
+        self.root = tk.Toplevel(log_window.root)
+        self.root.title("Select WhatsApp Group to Copy ID")
+        self.root.geometry("500x600")
+        self.root.attributes('-toolwindow', True)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        
+        # Header
+        header = tk.Frame(self.root, bg="#333", padx=10, pady=10)
+        header.pack(fill='x')
+        tk.Label(header, text="Click on a group to copy its ID", fg="white", bg="#333", font=("Arial", 10, "bold")).pack()
+
+        # Container for the list with scrollbar
+        container = tk.Frame(self.root)
+        container.pack(expand=True, fill='both')
+        
+        canvas = tk.Canvas(container, bg="#f5f5f5")
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = tk.Frame(canvas, bg="#f5f5f5")
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Mouse wheel support
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    def show(self, groups):
+        if not self.root:
+            self.create()
+        
+        # Clear existing rows
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        def copy_id(gid, name):
+            pyperclip.copy(gid)
+            log(f"Copied ID for group '{name}': {gid}", "SUCCESS")
+            # Visual feedback optional, but log is fine
+            
+        for group in groups:
+            row = tk.Frame(self.scrollable_frame, bg="white", highlightbackground="#ddd", highlightthickness=1, cursor="hand2")
+            row.pack(fill='x', padx=5, pady=2)
+            
+            name_label = tk.Label(row, text=group['name'], font=("Arial", 10, "bold"), bg="white", anchor="w")
+            name_label.pack(fill='x', padx=10, pady=(5, 0))
+            
+            id_label = tk.Label(row, text=group['id'], font=("Consolas", 9), fg="#666", bg="white", anchor="w")
+            id_label.pack(fill='x', padx=10, pady=(0, 5))
+
+            # Bind click events to the whole row
+            for widget in (row, name_label, id_label):
+                widget.bind("<Button-1>", lambda e, g=group['id'], n=group['name']: copy_id(g, n))
+
+        self.root.deiconify()
+        self.root.lift()
+
+    def hide(self):
+        if self.root:
+            self.root.withdraw()
+
+group_window = GroupWindow()
 log_window = LogWindow()
 
 def on_quit(icon, item):
     """Exit the application when tray icon Quit is clicked."""
     log("Shutting down...", "INFO")
-    try:
-        if whatsapp_client:
+    
+    # Failsafe: Force exit after 10 seconds if shutdown hangs
+    def force_exit_failsafe():
+        time.sleep(10)
+        log("Failsafe: Forcing exit.", "WARNING")
+        os._exit(0)
+    
+    threading.Thread(target=force_exit_failsafe, daemon=True).start()
+
+    def library_cleanup():
+        # 1. Try to logout if connected
+        if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
             log("Logging out of WhatsApp...", "ACTION")
-            whatsapp_client.logout()
-            # The library might need time to close the browser
-            time.sleep(1)
-    except Exception as e:
-        log(f"Logout error: {e}", "ERROR")
+            try:
+                # Use a shorter timeout to prevent permanent hang
+                whatsapp_client.logout(timeout=10)
+            except Exception as e:
+                log(f"Logout error (expected on shut down): {e}", "DEBUG")
         
-    icon.stop()
+        # 2. Try to close via library
+        if whatsapp_creator:
+            log("Closing WhatsApp browser...", "ACTION")
+            try:
+                # Create.sync_close doesn't take arguments, it uses its own internal timeouts
+                whatsapp_creator.sync_close()
+            except Exception as e:
+                log(f"Library sync_close error: {e}", "DEBUG")
+
+    # Run library cleanup in a separate thread to avoid blocking the main quit thread
+    cleanup_thread = threading.Thread(target=library_cleanup)
+    cleanup_thread.start()
+    
+    # Give library a very short time to start closing
+    cleanup_thread.join(timeout=3)
+
+    # 3. Force kill any remaining browser processes for this session
+    log("Scanning for orphaned browser processes...", "DEBUG")
+    try:
+        config = load_config()
+        session_name = config.get('wpp_session', 'default_session')
+        # Look for processes with the session token directory in their command line
+        # Use both slash types for robustness
+        token_dir_win = f"tokens\\{session_name}"
+        token_dir_unix = f"tokens/{session_name}"
+        
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                pinfo = proc.info
+                cmdline = " ".join(pinfo['cmdline'] or [])
+                if ("chrome" in pinfo['name'].lower() or "chromium" in pinfo['name'].lower()) and \
+                   (token_dir_win in cmdline or token_dir_unix in cmdline):
+                    log(f"Force killing browser process (PID {pinfo['pid']})...", "ACTION")
+                    proc.kill()
+                    log(f"Process {pinfo['pid']} killed.", "DEBUG")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception as e:
+        log(f"Process cleanup error: {e}", "DEBUG")
+        
+    log("Finalizing shutdown...", "INFO")
+    try:
+        icon.stop()
+        log("Tray icon stopped.", "DEBUG")
+    except Exception as e:
+        log(f"Icon stop error: {e}", "DEBUG")
+
     if log_window.root:
-        log_window.root.destroy()
+        log("Destroying log window...", "DEBUG")
+        try:
+            log_window.root.destroy()
+            log("Log window destroyed.", "DEBUG")
+        except Exception as e:
+            log(f"Log window destroy error: {e}", "DEBUG")
+            
+    log("Exiting application now.", "SUCCESS")
+    # Final force exit to ensure all threads (including hangs) are terminated
     os._exit(0)
 
 def setup_tray():
@@ -381,7 +519,7 @@ def setup_tray():
             
         menu = pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None, enabled=False),
-            pystray.MenuItem("Copy Group IDs", lambda icon, item: copy_groups_to_clipboard()),
+            pystray.MenuItem("Group IDs", lambda icon, item: show_group_selector()),
             pystray.MenuItem("Show/Hide Logs", lambda icon, item: log_window.toggle()),
             pystray.MenuItem("Quit", on_quit)
         )
@@ -416,7 +554,7 @@ if __name__ == '__main__':
     # WPP_Whatsapp.Create needs to run where it can open a window if needed
     threading.Thread(target=init_whatsapp, daemon=True).start()
     
-    # Start Tkinter mainloop in the main thread (required for GUI)
+    # Initialize UI and start loop
     log_window.create()
     log_window.hide() # Start hidden
     log_window.root.mainloop()
