@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     targetUrl: '',
     intervalMinutes: 60,
     selectors: {},
-    autoCapture: true,  // Default ON to match main.py behavior
+    autoCapture: false,  // Default OFF as requested
     retryMinutes: 5
 };
 // ─── Freeze page by injecting into MAIN world ───

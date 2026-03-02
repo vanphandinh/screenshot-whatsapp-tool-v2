@@ -4,3 +4,6 @@ requests
 pystray
 Pillow
 pyautogui
+WPP_Whatsapp
+pyperclip
+

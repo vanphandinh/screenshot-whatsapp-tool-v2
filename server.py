@@ -11,6 +11,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests as http_requests
+from WPP_Whatsapp import Create
 import pyautogui
 import threading
 import pystray
@@ -45,98 +46,62 @@ def log(message, type="INFO"):
     print(formatted_msg)
     log_queue.put(formatted_msg + "\n")
 
-# --- WPPConnect Client ---
-class WPPConnectClient:
-    def __init__(self, base_url, session, secret_key):
-        self.base_url = base_url.rstrip('/')
-        self.session = session
-        self.secret_key = secret_key
-        self.token = None
-        self.headers = {"Content-Type": "application/json"}
+# --- WhatsApp Manager (WPP_Whatsapp) ---
+whatsapp_client = None
+whatsapp_creator = None
 
-    def _generate_token(self):
-        log(f"Generating access token for session: {self.session}...", "DEBUG")
-        url = f"{self.base_url}/api/{self.session}/{self.secret_key}/generate-token"
-        try:
-            response = http_requests.post(url, timeout=20)
-            if response.status_code in [200, 201]:
-                self.token = response.json().get('token')
-                self.headers["Authorization"] = f"Bearer {self.token}"
-                log("Token generated successfully.", "SUCCESS")
-                return True
-            log(f"Failed to generate token: {response.text}", "ERROR")
-        except Exception as e:
-            log(f"Token generation error: {e}", "ERROR")
-        return False
-
-    def send_image(self, phone_number, file_path, caption=""):
-        if not self.token:
-            if not self._generate_token():
-                return False
-
-        is_group = "@g.us" in phone_number
-        chat_id = phone_number if is_group else f"{phone_number.replace('+', '')}"
+def init_whatsapp():
+    global whatsapp_client, whatsapp_creator
+    try:
+        config = load_config()
+        session_name = config.get('wpp_session', 'default_session')
+        log(f"Initializing WhatsApp session: {session_name}...", "INFO")
+        log("A browser window will open for QR code scanning.", "ACTION")
         
-        try:
-            with open(file_path, "rb") as img:
-                b64 = base64.b64encode(img.read()).decode('utf-8')
-                base64_data = f"data:image/png;base64,{b64}"
-        except Exception as e:
-            log(f"Image encoding error: {e}", "ERROR")
-            return False
-
-        url = f"{self.base_url}/api/{self.session}/send-image"
-        payload = {
-            "phone": chat_id,
-            "base64": base64_data,
-            "caption": caption,
-            "isGroup": is_group
-        }
+        whatsapp_creator = Create(session=session_name)
+        whatsapp_client = whatsapp_creator.start()
         
-        log(f"Sending image to {phone_number}...", "ACTION")
-        try:
-            res = http_requests.post(url, headers=self.headers, json=payload, timeout=45)
-            if res.status_code == 401:
-                if self._generate_token():
-                    res = http_requests.post(url, headers=self.headers, json=payload, timeout=45)
+        if whatsapp_creator.state == 'CONNECTED':
+            log("WhatsApp connected successfully!", "SUCCESS")
+        else:
+            log(f"WhatsApp state: {whatsapp_creator.state}", "WARNING")
             
-            if res.status_code in [200, 201]:
-                log("Message sent successfully!", "SUCCESS")
-                return True
-            log(f"Send failed: {res.status_code} - {res.text}", "ERROR")
-        except Exception as e:
-            log(f"WPPConnect exception: {e}", "ERROR")
-        return False
+    except Exception as e:
+        log(f"WhatsApp init error: {e}", "ERROR")
 
-    def send_text(self, phone_number, message):
-        if not self.token:
-            if not self._generate_token():
-                return False
+def get_group_ids():
+    global whatsapp_client
+    if not whatsapp_client or whatsapp_creator.state != 'CONNECTED':
+        log("WhatsApp not connected.", "ERROR")
+        return []
+    
+    try:
+        log("Fetching group IDs...", "ACTION")
+        groups = whatsapp_client.getAllGroups()
+        results = []
+        for g in groups:
+            name = g.get('name', 'Unnamed Group')
+            gid = g.get('id', {}).get('_serialized', g.get('id', 'N/A'))
+            results.append(f"{name}: {gid}")
+        return results
+    except Exception as e:
+        log(f"Error fetching groups: {e}", "ERROR")
+        return []
 
-        is_group = "@g.us" in phone_number
-        chat_id = phone_number if is_group else f"{phone_number.replace('+', '')}"
-
-        url = f"{self.base_url}/api/{self.session}/send-message"
-        payload = {
-            "phone": chat_id,
-            "message": message,
-            "isGroup": is_group
-        }
-        
-        log(f"Sending text to {phone_number}...", "ACTION")
-        try:
-            res = http_requests.post(url, headers=self.headers, json=payload, timeout=45)
-            if res.status_code == 401:
-                if self._generate_token():
-                    res = http_requests.post(url, headers=self.headers, json=payload, timeout=45)
-            
-            if res.status_code in [200, 201]:
-                log("Text sent successfully!", "SUCCESS")
-                return True
-            log(f"Send failed: {res.status_code} - {res.text}", "ERROR")
-        except Exception as e:
-            log(f"WPPConnect exception: {e}", "ERROR")
-        return False
+def copy_groups_to_clipboard():
+    try:
+        import pyperclip
+        groups = get_group_ids()
+        if groups:
+            text = "\n".join(groups)
+            pyperclip.copy(text)
+            log("Group IDs copied to clipboard!", "SUCCESS")
+        else:
+            log("No groups found or not connected.", "WARNING")
+    except ImportError:
+        log("pyperclip not installed. Cannot copy to clipboard.", "ERROR")
+    except Exception as e:
+        log(f"Clipboard error: {e}", "ERROR")
 
 
 # ─── Full-screen screenshot ───
@@ -299,18 +264,20 @@ def capture():
         log(f"Caption: {caption}", "SUCCESS")
 
         # Send via WhatsApp
-        client = WPPConnectClient(
-            config['wpp_base_url'],
-            config['wpp_session'],
-            config['wpp_secret_key']
-        )
-
         send_success = False
-        if screenshot_path:
-            send_success = client.send_image(config['phone_number'], screenshot_path, caption)
+        if whatsapp_client and whatsapp_creator.state == 'CONNECTED':
+            try:
+                if screenshot_path:
+                    log(f"Sending image to {config['phone_number']}...", "ACTION")
+                    whatsapp_client.sendImage(config['phone_number'], screenshot_path, caption=caption)
+                else:
+                    log(f"Sending text to {config['phone_number']}...", "ACTION")
+                    whatsapp_client.sendText(config['phone_number'], caption)
+                send_success = True
+            except Exception as e:
+                log(f"WhatsApp sending error: {e}", "ERROR")
         else:
-            log("No screenshot available, sending text only", "INFO")
-            send_success = client.send_text(config['phone_number'], caption)
+            log("WhatsApp client not connected or initialized.", "ERROR")
 
         if send_success:
             log("Report sent successfully!", "SUCCESS")
@@ -388,6 +355,16 @@ log_window = LogWindow()
 
 def on_quit(icon, item):
     """Exit the application when tray icon Quit is clicked."""
+    log("Shutting down...", "INFO")
+    try:
+        if whatsapp_client:
+            log("Logging out of WhatsApp...", "ACTION")
+            whatsapp_client.logout()
+            # The library might need time to close the browser
+            time.sleep(1)
+    except Exception as e:
+        log(f"Logout error: {e}", "ERROR")
+        
     icon.stop()
     if log_window.root:
         log_window.root.destroy()
@@ -404,6 +381,7 @@ def setup_tray():
             
         menu = pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None, enabled=False),
+            pystray.MenuItem("Copy Group IDs", lambda icon, item: copy_groups_to_clipboard()),
             pystray.MenuItem("Show/Hide Logs", lambda icon, item: log_window.toggle()),
             pystray.MenuItem("Quit", on_quit)
         )
@@ -433,6 +411,10 @@ if __name__ == '__main__':
     
     # Setup System Tray (runs in its own thread internally now)
     setup_tray()
+    
+    # Initialize WhatsApp (runs in the main thread or separate thread as needed)
+    # WPP_Whatsapp.Create needs to run where it can open a window if needed
+    threading.Thread(target=init_whatsapp, daemon=True).start()
     
     # Start Tkinter mainloop in the main thread (required for GUI)
     log_window.create()

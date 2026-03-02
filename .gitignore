@@ -8,6 +8,7 @@ venv/
 # --- Project Specific ---
 screenshots/*.png
 !screenshots/.gitkeep
+tokens/
 
 # --- Configuration (Sensitive) ---
 # Better to ignore and provide config.example.json

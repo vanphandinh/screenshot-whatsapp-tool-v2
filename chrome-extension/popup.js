@@ -9,7 +9,7 @@ let config = {
     serverUrl: 'http://localhost:5001',
     targetUrl: '',
     selectors: {},
-    autoCapture: true
+    autoCapture: false
 };
 
 const logs = [];
