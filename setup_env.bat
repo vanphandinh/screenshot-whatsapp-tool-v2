@@ -50,8 +50,6 @@ echo ======================================================
 echo [+] Setup completed successfully!
 echo [*] You can now run:
 echo     1. run_server.bat    (to start the capture server)
-echo     2. run_dashboard.bat (to manage WhatsApp sessions)
-echo     3. run_get_groups.bat (to get group ids)
 echo ======================================================
 echo.
 pause
