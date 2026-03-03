@@ -33,7 +33,19 @@ def load_config():
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        config = json.load(f)
+    # Default to True if not present
+    if 'logout_on_exit' not in config:
+        config['logout_on_exit'] = True
+    return config
+
+def save_config(config):
+    try:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        log("Configuration saved.", "DEBUG")
+    except Exception as e:
+        log(f"Error saving config: {e}", "ERROR")
 
 # --- Logging ---
 log_queue = Queue()
@@ -440,14 +452,18 @@ def on_quit(icon, item):
     threading.Thread(target=force_exit_failsafe, daemon=True).start()
 
     def library_cleanup():
-        # 1. Try to logout if connected
-        if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
-            log("Logging out of WhatsApp...", "ACTION")
-            try:
-                # Use a shorter timeout to prevent permanent hang
-                whatsapp_client.logout(timeout=10)
-            except Exception as e:
-                log(f"Logout error (expected on shut down): {e}", "DEBUG")
+        # 1. Try to logout if connected and preference is enabled
+        config = load_config()
+        if config.get('logout_on_exit', True):
+            if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
+                log("Logging out of WhatsApp...", "ACTION")
+                try:
+                    # Use a shorter timeout to prevent permanent hang
+                    whatsapp_client.logout(timeout=10)
+                except Exception as e:
+                    log(f"Logout error (expected on shut down): {e}", "DEBUG")
+        else:
+            log("Skipping WhatsApp logout as per user preference.", "INFO")
         
         # 2. Try to close via library
         if whatsapp_creator:
@@ -517,10 +533,19 @@ def setup_tray():
         else:
             image = Image.new('RGB', (64, 64), color=(73, 109, 137))
             
+        def toggle_logout(icon, item):
+            config = load_config()
+            new_val = not config.get('logout_on_exit', True)
+            config['logout_on_exit'] = new_val
+            save_config(config)
+            log(f"Logout on exit set to: {new_val}", "INFO")
+
+        config = load_config()
         menu = pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None, enabled=False),
             pystray.MenuItem("Show Group IDs", lambda icon, item: show_group_selector()),
-            pystray.MenuItem("Show/Hide Logs", lambda icon, item: log_window.toggle()),
+            pystray.MenuItem("Show Logs", lambda icon, item: log_window.toggle()),
+            pystray.MenuItem("Logout On Exit", toggle_logout, checked=lambda item: load_config().get('logout_on_exit', True)),
             pystray.MenuItem("Quit", on_quit)
         )
         
