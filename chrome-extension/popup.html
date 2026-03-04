@@ -73,12 +73,32 @@
                 </div>
             </div>
 
-            <div class="action-bar-dual">
-                <button class="btn btn-secondary btn-sm" id="btnTestNormal">
-                    🚀 Test thường
-                </button>
-                <button class="btn btn-accent btn-sm" id="btnTest22h">
-                    🌙 Test báo cáo 22h
+            <div class="action-bar-test">
+                <select class="input-select" id="selectTestMode">
+                    <optgroup label="── Dữ liệu thật ──">
+                        <option value="live">📡 Chạy ngay (dữ liệu thật)</option>
+                    </optgroup>
+                    <optgroup label="── Cơ bản ──">
+                        <option value="normal">🚀 Tất cả hoạt động</option>
+                        <option value="22h">🌙 Tất cả HĐ + báo cáo 22h</option>
+                    </optgroup>
+                    <optgroup label="── Một điều kiện ──">
+                        <option value="low_wind">💨 Gió thấp</option>
+                        <option value="maintenance">🔧 Bảo trì</option>
+                        <option value="error">⚠️ Lỗi</option>
+                    </optgroup>
+                    <optgroup label="── Hỗn hợp ──">
+                        <option value="wind_maint">💨🔧 Gió thấp + Bảo trì</option>
+                        <option value="wind_error">💨⚠️ Gió thấp + Lỗi</option>
+                        <option value="maint_error">🔧⚠️ Bảo trì + Lỗi</option>
+                    </optgroup>
+                    <optgroup label="── Đầy đủ ──">
+                        <option value="all_no22h">🔥 Tất cả điều kiện</option>
+                        <option value="all_22h">🔥🌙 Tất cả + 22h</option>
+                    </optgroup>
+                </select>
+                <button class="btn btn-primary btn-sm" id="btnTest">
+                    ▶ Test
                 </button>
             </div>
         </section>

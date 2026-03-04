@@ -413,14 +413,51 @@ body {
     margin-top: 14px;
 }
 
-.action-bar-dual {
+.action-bar-test {
     display: flex;
     gap: 8px;
     margin-top: 14px;
+    align-items: center;
 }
 
-.action-bar-dual .btn {
+.action-bar-test .input-select {
     flex: 1;
+}
+
+/* ─── Select Dropdown ─── */
+.input-select {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239898b0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 26px;
+}
+
+.input-select:focus {
+    border-color: var(--accent);
+}
+
+.input-select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 4px 8px;
+}
+
+.input-select optgroup {
+    background: var(--bg-primary);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-style: italic;
 }
 
 /* ─── Form Group ─── */

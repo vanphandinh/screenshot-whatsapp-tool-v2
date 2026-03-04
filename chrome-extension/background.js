@@ -492,6 +492,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    if (msg.type === 'TEST_WITH_DATA') {
+        // Test with mock data — take screenshot then send mock data directly to server
+        const force22h = msg.force22h || false;
+        const mockData = msg.mockData || {};
+        setTimeout(async () => {
+            try {
+                const config = await getConfig();
+
+                // Take screenshot for visual verification
+                const ts = new Date().toISOString();
+
+                // Focus and screenshot the target tab if possible
+                if (config.targetUrl) {
+                    const tab = await getTargetTab(config.targetUrl);
+                    if (tab) {
+                        await chrome.windows.update(tab.windowId, { focused: true, state: 'maximized' });
+                        await chrome.tabs.update(tab.id, { active: true });
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+
+                // Take screenshot using the existing captureVisibleTab or pyautogui on server side
+                // We'll send the data and let server handle screenshot
+                const payload = {
+                    timestamp: ts,
+                    url: config.targetUrl || 'test-mode',
+                    data: mockData,
+                    force_22h: force22h
+                };
+
+                const result = await sendToServer(config.serverUrl, payload);
+
+                chrome.storage.local.set({
+                    lastCapture: { time: new Date().toISOString(), result }
+                });
+
+                if (result.success) {
+                    addCaptureLog('success', `Test thành công. Caption: ${result.serverResponse?.caption || ''}`);
+                } else {
+                    addCaptureLog('error', `Test thất bại: ${result.error}`);
+                }
+                sendResponse(result);
+            } catch (err) {
+                addCaptureLog('error', `Test lỗi: ${err.message}`);
+                sendResponse({ success: false, error: err.message });
+            }
+        }, 500);
+        return true;
+    }
+
     if (msg.type === 'GET_CONFIG') {
         getConfig().then(config => sendResponse(config));
         return true;

@@ -35,8 +35,8 @@ def load_config():
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         config = json.load(f)
     # Default to True if not present
-    if 'logout_on_exit' not in config:
-        config['logout_on_exit'] = True
+    if 'logout_on_quit' not in config:
+        config['logout_on_quit'] = True
     return config
 
 def save_config(config):
@@ -226,42 +226,74 @@ def capture():
         m_val = get_val("M")
         deg = get_val("DEG")
 
+        tb1 = get_val("TB1")
+        tb2 = get_val("TB2")
+        tb3 = get_val("TB3")
+        tb4 = get_val("TB4")
+        tb5 = get_val("TB5")
+        tb6 = get_val("TB6")
+        tb7 = get_val("TB7")
+        tb8 = get_val("TB8")
+        tb9 = get_val("TB9")
+        tb10 = get_val("TB10")
+        tb11 = get_val("TB11")
+        tb12 = get_val("TB12")
+
         # Validate required fields
         missing = []
         if not dc: missing.append("DC")
         if not aws: missing.append("AWS")
         if not tap: missing.append("TAP")
+        if not tb1: missing.append("TB1")
+        if not tb2: missing.append("TB2")
+        if not tb3: missing.append("TB3")
+        if not tb4: missing.append("TB4")
+        if not tb5: missing.append("TB5")
+        if not tb6: missing.append("TB6")
+        if not tb7: missing.append("TB7")
+        if not tb8: missing.append("TB8")
+        if not tb9: missing.append("TB9")
+        if not tb10: missing.append("TB10")
+        if not tb11: missing.append("TB11")
+        if not tb12: missing.append("TB12")
+        if not deg: missing.append("DEG")
+        if not f_val: missing.append("F")
+        if not m_val: missing.append("M")
 
         if missing:
             msg = f"Missing required fields: {', '.join(missing)}"
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg}), 400
 
+        # Count number of tb1-tb12 that are less than or equal to 0
+        try:
+            tb_values = [tb1, tb2, tb3, tb4, tb5, tb6, tb7, tb8, tb9, tb10, tb11, tb12]
+            inactive_tb = [tb for tb in tb_values if float(tb) <= 0]
+            inactive_tb_count = len(inactive_tb)
+        except ValueError:
+            log(f"Invalid TB value: {tb1}, {tb2}, {tb3}, {tb4}, {tb5}, {tb6}, {tb7}, {tb8}, {tb9}, {tb10}, {tb11}, {tb12}", "ERROR")
+            return jsonify({"success": False, "error": f"Invalid TB value: {tb1}, {tb2}, {tb3}, {tb4}, {tb5}, {tb6}, {tb7}, {tb8}, {tb9}, {tb10}, {tb11}, {tb12}"}), 400
+
         # Calculate active devices
         try:
             dc_num = int(dc)
-            f_num = int(f_val) if f_val else 0
-            m_num = int(m_val) if m_val else 0
-            active = dc_num - f_num - m_num
+            f_num = int(f_val)
+            m_num = int(m_val)
+            active = dc_num - inactive_tb_count
+            low_wind = inactive_tb_count - f_num - m_num
         except ValueError:
-            active = dc
-
-        # Parse TAP
-        try:
-            tap_num = float(tap)
-        except ValueError:
-            log(f"Invalid TAP value: {tap}", "ERROR")
-            return jsonify({"success": False, "error": f"Invalid TAP value: {tap}"}), 400
+            log(f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}", "ERROR")
+            return jsonify({"success": False, "error": f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}"}), 400
 
         # Build caption
-        if tap_num < 0:
-            caption = "BC BLĐ: Hiện tại 12 TB đang dừng, tốc độ gió thấp."
-        else:
-            caption = (
-                f"BC BLĐ: Hiện tại {active} TB đang hoạt động, "
-                f"tốc độ gió {aws} m/s, "
-                f"công suất phát {tap} MW."
-            )
+        caption = (
+            f"BC BLĐ: Hiện tại {active} TB đang hoạt động, " +
+            (f"{low_wind} TB dừng do tốc độ gió thấp, " if low_wind > 0 else "") +
+            (f"{m_num} TB dừng do đang bảo trì, " if m_num > 0 else "") +
+            (f"{f_num} TB dừng do bị lỗi, " if f_num > 0 else "") +
+            f"tốc độ gió {aws} m/s, "
+            f"công suất phát {tap} MW."
+        )
 
         # 22h report logic
         force_22h = payload.get('force_22h', False)
@@ -454,7 +486,7 @@ def on_quit(icon, item):
     def library_cleanup():
         # 1. Try to logout if connected and preference is enabled
         config = load_config()
-        if config.get('logout_on_exit', True):
+        if config.get('logout_on_quit', True):
             if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
                 log("Logging out of WhatsApp...", "ACTION")
                 try:
@@ -535,17 +567,17 @@ def setup_tray():
             
         def toggle_logout(icon, item):
             config = load_config()
-            new_val = not config.get('logout_on_exit', True)
-            config['logout_on_exit'] = new_val
+            new_val = not config.get('logout_on_quit', True)
+            config['logout_on_quit'] = new_val
             save_config(config)
-            log(f"Logout on exit set to: {new_val}", "INFO")
+            log(f"Logout on quit set to: {new_val}", "INFO")
 
         config = load_config()
         menu = pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None, enabled=False),
             pystray.MenuItem("Show Group IDs", lambda icon, item: show_group_selector()),
             pystray.MenuItem("Show Logs", lambda icon, item: log_window.toggle()),
-            pystray.MenuItem("Logout On Exit", toggle_logout, checked=lambda item: load_config().get('logout_on_exit', True)),
+            pystray.MenuItem("Logout On Quit", toggle_logout, checked=lambda item: load_config().get('logout_on_quit', True)),
             pystray.MenuItem("Quit", on_quit)
         )
         

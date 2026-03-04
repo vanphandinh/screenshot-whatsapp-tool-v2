@@ -14,6 +14,32 @@ let config = {
 
 const logs = [];
 
+// ─── Test Scenarios: mock data for each caption case ───
+// TB values: >0 = active, <=0 = inactive
+// low_wind = inactive_count - F - M
+const TEST_SCENARIOS = {
+    // All active, no issues
+    normal: { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false },
+    // All active + 22h report
+    '22h': { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true },
+    // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3
+    low_wind: { DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0
+    maintenance: { DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false },
+    // Error only: 1 TB inactive, F=1, M=0 → low_wind=0
+    error: { DC: '12', AWS: '5.3', TAP: '16.5', F: '1', M: '0', DEG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false },
+    // Low wind + Maintenance: 5 inactive, M=2, F=0 → low_wind=3
+    wind_maint: { DC: '12', AWS: '2.1', TAP: '10.5', F: '0', M: '2', DEG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // Low wind + Error: 4 inactive, F=1, M=0 → low_wind=3
+    wind_error: { DC: '12', AWS: '2.1', TAP: '12.0', F: '1', M: '0', DEG: '88.6', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // Maintenance + Error: 3 inactive, M=2, F=1 → low_wind=0
+    maint_error: { DC: '12', AWS: '5.3', TAP: '13.5', F: '1', M: '2', DEG: '100.7', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // All conditions, no 22h: 6 inactive, M=2, F=1 → low_wind=3
+    all_no22h: { DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // All conditions + 22h report
+    all_22h: { DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }
+};
+
 // ─── Init ───
 async function init() {
     // Load config from background
@@ -79,8 +105,10 @@ function bindEvents() {
     document.getElementById('btnRefreshPreview').addEventListener('click', refreshPreview);
 
     // Manual capture (test)
-    document.getElementById('btnTestNormal').addEventListener('click', () => captureNow(false));
-    document.getElementById('btnTest22h').addEventListener('click', () => captureNow(true));
+    document.getElementById('btnTest').addEventListener('click', () => {
+        const mode = document.getElementById('selectTestMode').value;
+        captureNow(mode);
+    });
 
     // Save settings
     document.getElementById('btnSaveSettings').addEventListener('click', saveSettings);
@@ -230,14 +258,13 @@ function renderPreview(data) {
 }
 
 // ─── Capture Now (manual test) ───
-async function captureNow(force22h = false) {
-    const btnId = force22h ? 'btnTest22h' : 'btnTestNormal';
-    const btn = document.getElementById(btnId);
+async function captureNow(mode = 'normal') {
+    const btn = document.getElementById('btnTest');
 
     if (btn) btn.classList.add('loading');
 
     try {
-        // --- Fix: Check server status BEFORE sending message and closing popup ---
+        // Check server status BEFORE sending message and closing popup
         const isOnline = await checkServerStatus();
         if (!isOnline) {
             alert('Không thể kết nối đến server. Vui lòng bật server và thử lại.');
@@ -245,8 +272,28 @@ async function captureNow(force22h = false) {
             return;
         }
 
-        // Server is online, proceed with capture
-        sendMsg({ type: 'CAPTURE_NOW', force22h });
+        // Live mode: real DOM capture
+        if (mode === 'live') {
+            sendMsg({ type: 'CAPTURE_NOW', force22h: false });
+        } else {
+            const scenario = TEST_SCENARIOS[mode];
+            if (scenario) {
+                // Build mock data payload from scenario
+                const mockData = {};
+                for (const [key, val] of Object.entries(scenario)) {
+                    if (key === 'force_22h') continue;
+                    mockData[key] = { value: val, found: true };
+                }
+                sendMsg({
+                    type: 'TEST_WITH_DATA',
+                    force22h: scenario.force_22h,
+                    mockData: mockData
+                });
+            } else {
+                // Fallback: normal live capture
+                sendMsg({ type: 'CAPTURE_NOW', force22h: false });
+            }
+        }
 
         // Wait 200ms just to ensure the message is sent before closing
         setTimeout(() => window.close(), 200);

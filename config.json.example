@@ -2,5 +2,5 @@
     "phone_number": "111111111111111111@g.us",
     "wpp_session": "default_session",
     "max_retention_days": 3,
-    "logout_on_exit": true
+    "logout_on_quit": true
 }
