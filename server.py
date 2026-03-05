@@ -5,6 +5,8 @@ Receives extracted data from Chrome extension and sends reports via WhatsApp (WP
 import os
 import json
 import time
+import ctypes
+import ctypes.wintypes
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -18,6 +20,137 @@ from tkinter import scrolledtext
 from queue import Queue
 import psutil
 import pyperclip
+
+# ─── Win32 helpers ───
+user32 = ctypes.windll.user32
+
+# Explicitly define argument and return types for 64-bit compatibility
+user32.SetWindowPos.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.wintypes.UINT]
+user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+
+user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = ctypes.wintypes.BOOL
+
+user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+
+user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
+user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+
+user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+user32.IsWindow.restype = ctypes.wintypes.BOOL
+
+user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextLengthW.argtypes = [ctypes.wintypes.HWND]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+
+user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
+
+user32.SetFocus.argtypes = [ctypes.wintypes.HWND]
+user32.SetFocus.restype = ctypes.wintypes.HWND
+
+# ─── Global State for Targeted Window ───
+target_hwnd = None
+target_window_title = "Chưa chọn"
+tray_icon = None
+
+def _enum_windows_callback(hwnd, results):
+    """Collect all visible top-level windows."""
+    if user32.IsWindowVisible(hwnd):
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length > 0:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            results.append((hwnd, buf.value))
+    return True
+
+def get_all_chrome_windows():
+    """Returns a list of (hwnd, title) for all visible Chrome windows."""
+    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.py_object)
+    windows = []
+    user32.EnumWindows(EnumWindowsProc(_enum_windows_callback), ctypes.py_object(windows))
+    return [(hwnd, title) for hwnd, title in windows
+            if 'google chrome' in title.lower() or 'chromium' in title.lower()]
+
+def find_chrome_window():
+    """
+    Find the Chrome window based on manual selection.
+    Returns hwnd or None.
+    """
+    global target_hwnd
+    
+    # Use manually selected window if it's still valid
+    if target_hwnd and user32.IsWindow(target_hwnd) and user32.IsWindowVisible(target_hwnd):
+        log(f"Using manually selected window: hwnd={target_hwnd}", "SUCCESS")
+        return target_hwnd
+
+    log("No manual window selected or window no longer valid.", "WARNING")
+    return None
+
+# ─── Native WinAPI Window Lock ───
+
+user32.LockSetForegroundWindow.argtypes = [ctypes.wintypes.UINT]
+user32.LockSetForegroundWindow.restype = ctypes.wintypes.BOOL
+LSFW_LOCK = 1
+LSFW_UNLOCK = 2
+
+user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
+user32.GetWindowRect.restype = ctypes.wintypes.BOOL
+
+user32.ClipCursor.argtypes = [ctypes.POINTER(ctypes.wintypes.RECT)]
+user32.ClipCursor.restype = ctypes.wintypes.BOOL
+
+class NativeWindowLock:
+    """A context manager that uses LockSetForegroundWindow and ClipCursor to lock focus."""
+    def __init__(self, hwnd):
+        self.hwnd = hwnd
+
+    def __enter__(self):
+        if self.hwnd and user32.IsWindow(self.hwnd):
+            log(f"Kích hoạt Native WinAPI Lock cho hwnd={self.hwnd}...", "DEBUG")
+            
+            # 1. Force to TopMost
+            HWND_TOPMOST = -1
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+            user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            
+            # 2. Lock Foreground transitions
+            user32.LockSetForegroundWindow(LSFW_LOCK)
+            
+            # 3. Clip Cursor to window bounds
+            rect = ctypes.wintypes.RECT()
+            if user32.GetWindowRect(self.hwnd, ctypes.byref(rect)):
+                user32.ClipCursor(ctypes.byref(rect))
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # 1. Release Cursor
+        user32.ClipCursor(None)
+        
+        # 2. Unlock Foreground transitions
+        user32.LockSetForegroundWindow(LSFW_UNLOCK)
+        
+        # 3. Release TopMost
+        if self.hwnd and user32.IsWindow(self.hwnd):
+            log(f"Giải phóng Native Lock cho hwnd={self.hwnd}.", "DEBUG")
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+            user32.SetWindowPos(self.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+
+def focus_and_restore_window(hwnd):
+    """Bring window to foreground, restore, maximize."""
+    SW_MAXIMIZE = 3
+    # Ensure window is maximized
+    log(f"Maximizing and focusing hwnd={hwnd}...", "DEBUG")
+    user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    user32.SetForegroundWindow(hwnd)
+    user32.BringWindowToTop(hwnd)
+    user32.SetFocus(hwnd)
 
 app = Flask(__name__)
 CORS(app)  # Allow Chrome extension to call this server
@@ -139,9 +272,14 @@ def cleanup_old_screenshots(retention_days):
         log(f"Cleanup error: {e}", "ERROR")
 
 def take_fullscreen_screenshot():
-    """Capture full screen using pyautogui and save to screenshots dir."""
+    """
+    Capture full screen using pyautogui.
+    Before capturing:
+      1. Find the Chrome window (must be manually selected).
+      2. Bring it to the foreground and set to TopMost.
+      3. Capture screenshot and release TopMost.
+    """
     try:
-        # Run cleanup before taking new screenshot
         config = load_config()
         cleanup_old_screenshots(config.get('max_retention_days', 3))
     except Exception:
@@ -149,12 +287,27 @@ def take_fullscreen_screenshot():
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(SCREENSHOT_DIR, f"capture_{ts}.png")
+
     try:
-        img = pyautogui.screenshot()
+        # 1. Find & focus/maximize the Chrome window
+        hwnd = find_chrome_window()
+        if hwnd:
+            focus_and_restore_window(hwnd)
+            # 2. Use NativeWindowLock to trap focus and cursor during capture
+            with NativeWindowLock(hwnd):
+                time.sleep(0.5) 
+                log(f"Đang chụp màn hình (Native Lock active)...", "INFO")
+                img = pyautogui.screenshot()
+        else:
+            log("No Chrome window selected. Capture cancelled.", "ERROR")
+            return None
+
         img.save(path)
         log(f"Full-screen screenshot saved: {path}", "SUCCESS")
         return path
     except Exception as e:
+        if 'hwnd' in locals() and hwnd:
+            focus_and_restore_window(hwnd)
         log(f"Screenshot error: {e}", "ERROR")
         return None
 
@@ -199,7 +352,6 @@ def capture():
 
         log("=" * 40, "INFO")
         log(f"Received capture at {payload.get('timestamp', 'unknown')}", "ACTION")
-        log(f"Source URL: {payload.get('url', 'unknown')}", "DEBUG")
 
         # Log extracted values
         for name, info in data.items():
@@ -468,6 +620,91 @@ class GroupWindow:
         if self.root:
             self.root.withdraw()
 
+class ChromeWindowWindow:
+    def __init__(self):
+        self.root = None
+        self.scrollable_frame = None
+
+    def create(self):
+        if self.root:
+            return
+        self.root = tk.Toplevel(log_window.root)
+        self.root.title("Chọn cửa sổ Chrome mục tiêu")
+        self.root.geometry("600x500")
+        self.root.attributes('-toolwindow', True)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        
+        # Header
+        header = tk.Frame(self.root, bg="#0277BD", padx=10, pady=10)
+        header.pack(fill='x')
+        tk.Label(header, text="Chọn cửa sổ trình duyệt bạn muốn chụp màn hình", fg="white", bg="#0277BD", font=("Arial", 11, "bold")).pack()
+
+        # Container
+        container = tk.Frame(self.root)
+        container.pack(expand=True, fill='both')
+        
+        canvas = tk.Canvas(container, bg="#fff")
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = tk.Frame(canvas, bg="#fff")
+
+        self.scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def show(self):
+        """Thread-safe show using after() to run on the main Tkinter thread."""
+        if log_window.root:
+            log_window.root.after(0, self._show_sync)
+
+    def _show_sync(self):
+        """Actual UI logic to list and show Chrome windows."""
+        chrome_windows = get_all_chrome_windows()
+        if not chrome_windows:
+            log("Không tìm thấy cửa sổ Chrome nào đang mở.", "WARNING")
+            return
+
+        if not self.root:
+            self.create()
+        
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        def select_window(hwnd, title):
+            global target_hwnd, target_window_title, tray_icon
+            target_hwnd = hwnd
+            target_window_title = title
+            log(f"Đã chọn cửa sổ tiêu: {title} (hwnd={hwnd})", "SUCCESS")
+            if tray_icon:
+                try:
+                    tray_icon.update_menu()
+                except Exception:
+                    pass
+            self.hide()
+            
+        for hwnd, title in chrome_windows:
+            is_selected = (hwnd == target_hwnd)
+            bg_color = "#E1F5FE" if is_selected else "white"
+            
+            row = tk.Frame(self.scrollable_frame, bg=bg_color, highlightbackground="#ddd", highlightthickness=1, cursor="hand2")
+            row.pack(fill='x', padx=10, pady=5)
+            
+            lbl = tk.Label(row, text=title, font=("Arial", 10), bg=bg_color, anchor="w", wraplength=540, justify="left")
+            lbl.pack(fill='x', padx=15, pady=10)
+
+            # Bind click
+            for widget in (row, lbl):
+                widget.bind("<Button-1>", lambda e, h=hwnd, t=title: select_window(h, t))
+
+        self.root.deiconify()
+        self.root.lift()
+
+    def hide(self):
+        if self.root:
+            self.root.withdraw()
+
+chrome_window_selector = ChromeWindowWindow()
 group_window = GroupWindow()
 log_window = LogWindow()
 
@@ -574,7 +811,8 @@ def setup_tray():
 
         config = load_config()
         menu = pystray.Menu(
-            pystray.MenuItem("Status: Running", lambda: None, enabled=False),
+            pystray.MenuItem(lambda item: f"Target: {target_window_title[:50]}...", lambda: None, enabled=False),
+            pystray.MenuItem("Select Target Chrome Window", lambda icon, item: chrome_window_selector.show()),
             pystray.MenuItem("Show Group IDs", lambda icon, item: show_group_selector()),
             pystray.MenuItem("Show Logs", lambda icon, item: log_window.toggle()),
             pystray.MenuItem("Logout On Quit", toggle_logout, checked=lambda item: load_config().get('logout_on_quit', True)),
@@ -582,6 +820,8 @@ def setup_tray():
         )
         
         icon = pystray.Icon("whatsapp_tool_server", image, "WhatsApp Tool Server", menu)
+        global tray_icon
+        tray_icon = icon
         log("System Tray Icon started.", "SUCCESS")
         
         # Run pystray in a separate thread so tkinter can own the main thread
