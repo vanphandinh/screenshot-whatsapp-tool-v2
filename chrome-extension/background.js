@@ -143,11 +143,6 @@ async function saveScheduleState(state) {
 
 // ─── Scheduling logic (mirrors main.py) ───
 
-/**
- * Succces -> next hour at random second between 0 and 600 (0-10 min)
- * Failure -> retry in 5 minutes
- * Returns absolute Date object.
- */
 function computeNextRunTime(success) {
     const now = new Date();
 
@@ -282,7 +277,7 @@ async function ensureContentScript(tabId) {
 }
 
 // ─── Capture data from target tab ───
-async function captureData(force22h = false) {
+async function captureData(force22h = false, isTest = false) {
     const config = await getConfig();
 
     if (!config.targetUrl) {
@@ -336,12 +331,32 @@ async function captureData(force22h = false) {
             return { success: false, error: 'Failed to extract data from page' };
         }
 
+        // Check if any of the extracted data is undefined or empty
+        let isDataValid = true;
+        for (const [key, info] of Object.entries(response.data)) {
+            if (info === undefined || info.value === undefined || info.value === '' || info.value === null) {
+                isDataValid = false;
+                break;
+            }
+        }
+
+        if (!isDataValid) {
+            console.log('[DOMCapture] Extracted data is missing or empty, reloading tab:', tab.id);
+            try {
+                await chrome.tabs.reload(tab.id);
+            } catch (err) {
+                console.log('[DOMCapture] Could not reload tab:', err.message);
+            }
+            return { success: false, error: 'Missing or empty data extracted' };
+        }
+
         // Prepare payload for server
         const payload = {
             timestamp: new Date().toISOString(),
             url: config.targetUrl,
             data: response.data,
-            force_22h: force22h
+            force_22h: force22h,
+            is_test: isTest
         };
 
         // Send extracted data to server for processing and screenshot
@@ -478,7 +493,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Manual capture — add 500ms delay to allow popup to close
         const force22h = msg.force22h || false;
         setTimeout(async () => {
-            const result = await captureData(force22h);
+            const result = await captureData(force22h, true); // true because it's a manual test
             chrome.storage.local.set({
                 lastCapture: { time: new Date().toISOString(), result }
             });
@@ -519,7 +534,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     timestamp: ts,
                     url: config.targetUrl || 'test-mode',
                     data: mockData,
-                    force_22h: force22h
+                    force_22h: force22h,
+                    is_test: true
                 };
 
                 const result = await sendToServer(config.serverUrl, payload);

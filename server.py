@@ -456,18 +456,29 @@ def capture():
         log(f"Caption: {caption}", "SUCCESS")
 
         # Send via WhatsApp
+        is_test = payload.get('is_test', False)
+        target_number = config.get('phone_number')
+        if is_test:
+            test_phone = config.get('test_phone_number', '').strip()
+            if test_phone:
+                target_number = test_phone
+
         send_success = False
         if whatsapp_client and whatsapp_creator.state == 'CONNECTED':
-            try:
-                if screenshot_path:
-                    log(f"Sending image to {config['phone_number']}...", "ACTION")
-                    whatsapp_client.sendImage(config['phone_number'], screenshot_path, caption=caption)
-                else:
-                    log(f"Sending text to {config['phone_number']}...", "ACTION")
-                    whatsapp_client.sendText(config['phone_number'], caption)
-                send_success = True
-            except Exception as e:
-                log(f"WhatsApp sending error: {e}", "ERROR")
+            if not target_number:
+                log("Target WhatsApp number not configured.", "ERROR")
+            else:
+                try:
+                    msg_type_log = "TEST" if is_test else "LIVE"
+                    if screenshot_path:
+                        log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
+                        whatsapp_client.sendImage(target_number, screenshot_path, caption=caption)
+                    else:
+                        log(f"Sending text to {target_number} ({msg_type_log})...", "ACTION")
+                        whatsapp_client.sendText(target_number, caption)
+                    send_success = True
+                except Exception as e:
+                    log(f"WhatsApp sending error: {e}", "ERROR")
         else:
             log("WhatsApp client not connected or initialized.", "ERROR")
 
