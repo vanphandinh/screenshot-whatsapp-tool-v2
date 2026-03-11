@@ -296,6 +296,34 @@ async function captureData(force22h = false, isTest = false) {
 
         await ensureContentScript(tab.id);
 
+        // Check if we need to reload the page from a previous failed attempt
+        const storage = await new Promise(r => chrome.storage.local.get('pendingReload', r));
+        if (storage.pendingReload) {
+            console.log('[DOMCapture] Pending reload detected. Reloading tab before extraction...');
+            await chrome.storage.local.remove('pendingReload');
+
+            // Reload and wait for completion
+            await chrome.tabs.reload(tab.id);
+            await new Promise((resolve) => {
+                const listener = (tabId, info) => {
+                    if (tabId === tab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve();
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+                setTimeout(() => {
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }, 30000); // 30s timeout
+            });
+            console.log('[DOMCapture] Tab reloaded. Waiting for DOM to settle.');
+            await new Promise(r => setTimeout(r, 2000)); // Give it extra 2 seconds
+
+            // Re-inject content script if needed after reload
+            await ensureContentScript(tab.id);
+        }
+
         // 1. Focus the window and maximize it
         await chrome.windows.update(tab.windowId, {
             focused: true,
@@ -321,13 +349,8 @@ async function captureData(force22h = false, isTest = false) {
         });
 
         if (!response || !response.ok) {
-            // Reload page to unfreeze on extraction error
-            try {
-                console.log('[DOMCapture] Extraction failed, reloading tab:', tab.id);
-                await chrome.tabs.reload(tab.id);
-            } catch (err) {
-                console.log('[DOMCapture] Could not reload tab:', err.message);
-            }
+            console.log('[DOMCapture] Extraction failed. Flagging for reload on next attempt:', tab.id);
+            await chrome.storage.local.set({ pendingReload: true });
             return { success: false, error: 'Failed to extract data from page' };
         }
 
@@ -341,14 +364,11 @@ async function captureData(force22h = false, isTest = false) {
         }
 
         if (!isDataValid) {
-            console.log('[DOMCapture] Extracted data is missing or empty, reloading tab:', tab.id);
-            try {
-                await chrome.tabs.reload(tab.id);
-            } catch (err) {
-                console.log('[DOMCapture] Could not reload tab:', err.message);
-            }
+            console.log('[DOMCapture] Extracted data is missing or empty. Flagging for reload on next attempt:', tab.id);
+            await chrome.storage.local.set({ pendingReload: true });
             return { success: false, error: 'Missing or empty data extracted' };
         }
+
 
         // Prepare payload for server
         const payload = {
@@ -375,18 +395,12 @@ async function captureData(force22h = false, isTest = false) {
 
     } catch (err) {
         console.error('[DOMCapture] Capture error:', err);
-        // Try to reload page on error (to unfreeze)
-        try {
-            const tab = await getTargetTab(config.targetUrl);
-            if (tab) {
-                console.log('[DOMCapture] Error occurred, reloading tab:', tab.id);
-                await chrome.tabs.reload(tab.id);
-            }
-        } catch (reloadErr) {
-            console.log('[DOMCapture] Could not reload on error:', reloadErr);
-        }
+        // Flag for reload on next attempt instead of immediate reload
+        console.log('[DOMCapture] Error occurred during capture. Flagging for reload on next attempt.');
+        await chrome.storage.local.set({ pendingReload: true });
         return { success: false, error: err.message };
     }
+
 }
 
 // ─── Send data to local Python server ───
@@ -622,7 +636,7 @@ chrome.runtime.onInstalled.addListener(async () => {
         await saveConfig(DEFAULT_CONFIG);
     }
     // Auto-start scheduling if autoCapture is enabled
-    if (config.autoCapture !== false) {
+    if (config.autoCapture === true) {
         await startScheduler();
     }
     console.log('[DOMCapture] Extension installed/updated');

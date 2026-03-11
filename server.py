@@ -75,17 +75,43 @@ def get_all_chrome_windows():
 
 def find_chrome_window():
     """
-    Find the Chrome window based on manual selection.
-    Returns hwnd or None.
+    Find the Chrome window. Uses auto-selection for windows with 'SCADA' in title,
+    then falls back to manual selection. Returns hwnd or None.
     """
-    global target_hwnd
+    global target_hwnd, target_window_title, tray_icon
     
-    # Use manually selected window if it's still valid
+    # 1. Auto-selection logic: find Chrome window with "SCADA" in title
+    chrome_windows = get_all_chrome_windows()
+    scada_windows = [(hwnd, title) for hwnd, title in chrome_windows if 'scada' in title.lower()]
+    
+    if len(scada_windows) == 1:
+        hwnd, title = scada_windows[0]
+        if target_hwnd != hwnd:
+            target_hwnd = hwnd
+            target_window_title = title
+            log(f"Tự động chọn cửa sổ SCADA: {title} (hwnd={hwnd})", "SUCCESS")
+            # Try to update tray menu visual 
+            if tray_icon:
+                try:
+                    tray_icon.update_menu()
+                except Exception:
+                    pass
+        else:
+            log(f"Đang dùng cửa sổ SCADA tự động: hwnd={hwnd}", "SUCCESS")
+        return hwnd
+    
+    # 2. Ambiguity or missing cases
+    if len(scada_windows) > 1:
+        log(f"Tìm thấy {len(scada_windows)} cửa sổ SCADA. Hủy tự động chọn.", "WARNING")
+    elif len(chrome_windows) > 0:
+        log("Không tìm thấy cửa sổ SCADA nào. Thử sử dụng cửa sổ chọn thủ công.", "WARNING")
+
+    # 3. Fallback to manually selected window
     if target_hwnd and user32.IsWindow(target_hwnd) and user32.IsWindowVisible(target_hwnd):
-        log(f"Using manually selected window: hwnd={target_hwnd}", "SUCCESS")
+        log(f"Sử dụng cửa sổ chọn thủ công: hwnd={target_hwnd}", "SUCCESS")
         return target_hwnd
 
-    log("No manual window selected or window no longer valid.", "WARNING")
+    log("Chưa chọn cửa sổ hợp lệ.", "WARNING")
     return None
 
 # ─── Native WinAPI Window Lock ───
@@ -715,9 +741,9 @@ class ChromeWindowWindow:
         if self.root:
             self.root.withdraw()
 
+log_window = LogWindow()
 chrome_window_selector = ChromeWindowWindow()
 group_window = GroupWindow()
-log_window = LogWindow()
 
 def on_quit(icon, item):
     """Exit the application when tray icon Quit is clicked."""
