@@ -51,10 +51,19 @@ user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
 user32.SetFocus.argtypes = [ctypes.wintypes.HWND]
 user32.SetFocus.restype = ctypes.wintypes.HWND
 
+user32.GetClassNameW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
+
 # ─── Global State for Targeted Window ───
 target_hwnd = None
 target_window_title = "Chưa chọn"
 tray_icon = None
+
+def _get_window_class(hwnd):
+    """Get the Win32 class name of a window."""
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
 
 def _enum_windows_callback(hwnd, results):
     """Collect all visible top-level windows."""
@@ -66,13 +75,21 @@ def _enum_windows_callback(hwnd, results):
             results.append((hwnd, buf.value))
     return True
 
+def _is_chrome_window(hwnd, title):
+    """Check if a window is a Chrome/Chromium window by title or class name."""
+    title_lower = title.lower()
+    if 'google chrome' in title_lower or 'chromium' in title_lower:
+        return True
+    # Fallback: detect by Win32 window class name (works for app mode, fullscreen, etc.)
+    class_name = _get_window_class(hwnd)
+    return class_name == 'Chrome_WidgetWin_1'
+
 def get_all_chrome_windows():
     """Returns a list of (hwnd, title) for all visible Chrome windows."""
     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.py_object)
     windows = []
     user32.EnumWindows(EnumWindowsProc(_enum_windows_callback), ctypes.py_object(windows))
-    return [(hwnd, title) for hwnd, title in windows
-            if 'google chrome' in title.lower() or 'chromium' in title.lower()]
+    return [(hwnd, title) for hwnd, title in windows if _is_chrome_window(hwnd, title)]
 
 def find_chrome_window():
     """
