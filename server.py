@@ -7,6 +7,7 @@ import json
 import time
 import ctypes
 import ctypes.wintypes
+import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -223,6 +224,12 @@ whatsapp_creator = None
 def init_whatsapp():
     global whatsapp_client, whatsapp_creator
     try:
+        # Set Playwright browser path to a permanent location (not TEMP)
+        # This prevents Windows from cleaning up the browser binaries
+        browsers_path = os.path.join(os.path.dirname(__file__), 'playwright-browsers')
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
+        log(f"Playwright browsers path: {browsers_path}", "DEBUG")
+
         config = load_config()
         session_name = config.get('wpp_session', 'default_session')
         log(f"Initializing WhatsApp session: {session_name}...", "INFO")
@@ -238,6 +245,7 @@ def init_whatsapp():
             
     except Exception as e:
         log(f"WhatsApp init error: {e}", "ERROR")
+        log(f"Full traceback:\n{traceback.format_exc()}", "ERROR")
 
 def get_groups():
     """Fetch groups from WhatsApp and return a list of (name, id) tuples."""

@@ -9,6 +9,7 @@ venv/
 screenshots/*.png
 !screenshots/.gitkeep
 tokens/
+playwright-browsers/
 
 # --- Configuration (Sensitive) ---
 # Better to ignore and provide config.example.json
