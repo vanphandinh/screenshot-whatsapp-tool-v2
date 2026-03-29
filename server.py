@@ -208,7 +208,21 @@ if not os.path.exists(SCREENSHOT_DIR):
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
+        # Fallback default configuration
+        default_config = {
+            "wpp_session": "default_session",
+            "phone_number": "",
+            "test_phone_number": "",
+            "max_retention_days": 3,
+            "logout_on_quit": True
+        }
+        try:
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=4)
+        except Exception:
+            pass
+        return default_config
+        
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         config = json.load(f)
     # Default to True if not present
@@ -469,9 +483,12 @@ def capture():
             return jsonify({"success": False, "error": msg}), 400
 
         # Count number of tb1-tb12 that are less than or equal to 0
+        def safe_float(v):
+            return float(str(v).replace(',', '.'))
+            
         try:
             tb_values = [tb1, tb2, tb3, tb4, tb5, tb6, tb7, tb8, tb9, tb10, tb11, tb12]
-            inactive_tb = [tb for tb in tb_values if float(tb) <= 0]
+            inactive_tb = [tb for tb in tb_values if safe_float(tb) <= 0]
             inactive_tb_count = len(inactive_tb)
         except ValueError:
             log(f"Invalid TB value: {tb1}, {tb2}, {tb3}, {tb4}, {tb5}, {tb6}, {tb7}, {tb8}, {tb9}, {tb10}, {tb11}, {tb12}", "ERROR")
@@ -479,9 +496,9 @@ def capture():
 
         # Calculate active devices
         try:
-            dc_num = int(dc)
-            f_num = int(f_val)
-            m_num = int(m_val)
+            dc_num = int(safe_float(dc))
+            f_num = int(safe_float(f_val))
+            m_num = int(safe_float(m_val))
             active = dc_num - inactive_tb_count
             low_wind = max(0, inactive_tb_count - f_num - m_num)
         except ValueError:
@@ -584,19 +601,29 @@ class LogWindow:
         while not log_queue.empty():
             msg = log_queue.get()
             self.text_area.insert(tk.END, msg)
+            
+            # Prevent infinite memory consumption over months of 24/7 uptime
+            try:
+                num_lines = int(float(self.text_area.index('end-1c')))
+                if num_lines > 2000:
+                    self.text_area.delete('1.0', f'{num_lines - 2000 + 1}.0')
+            except Exception:
+                pass
+                
             self.text_area.see(tk.END)
         self.root.after(100, self.update_logs)
 
     def show(self):
         if not self.root:
-            self.create()
+            # Should not happen as it's created at startup
+            pass
         else:
-            self.root.deiconify()
+            self.root.after(0, lambda: (self.root.deiconify(), self.root.lift()))
             self.visible = True
 
     def hide(self):
         if self.root:
-            self.root.withdraw()
+            self.root.after(0, self.root.withdraw)
             self.visible = False
 
     def toggle(self):
@@ -825,8 +852,9 @@ def on_quit(icon, item):
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 pinfo = proc.info
-                cmdline = " ".join(pinfo['cmdline'] or [])
-                if ("chrome" in pinfo['name'].lower() or "chromium" in pinfo['name'].lower()) and \
+                cmdline = " ".join(str(arg) for arg in (pinfo.get('cmdline') or []))
+                proc_name = pinfo.get('name') or ''
+                if ("chrome" in proc_name.lower() or "chromium" in proc_name.lower()) and \
                    (token_dir_win in cmdline or token_dir_unix in cmdline):
                     log(f"Force killing browser process (PID {pinfo['pid']})...", "ACTION")
                     proc.kill()
@@ -846,10 +874,10 @@ def on_quit(icon, item):
     if log_window.root:
         log("Destroying log window...", "DEBUG")
         try:
-            log_window.root.destroy()
-            log("Log window destroyed.", "DEBUG")
+            log_window.root.after(0, log_window.root.destroy)
+            log("Log window destroy command queued.", "DEBUG")
         except Exception as e:
-            log(f"Log window destroy error: {e}", "DEBUG")
+            log(f"Log window destroy command queue error: {e}", "DEBUG")
             
     log("Exiting application now.", "SUCCESS")
     # Final force exit to ensure all threads (including hangs) are terminated

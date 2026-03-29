@@ -1,7 +1,7 @@
 // =============================================================================
 // Background Service Worker — DOM Data Capture Extension
 // Scheduling logic matching main.py:
-//   - Run every hour at random minute 0-10
+//   - Run every hour at random minute 0-15
 //   - Retry in 5 minutes on failure
 //   - Auto-start on extension load
 // =============================================================================
@@ -158,30 +158,30 @@ function computeNextRunTime(success) {
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
 
-    // Add random 0-600 seconds (0 to 10 minutes)
-    const randomSeconds = Math.floor(Math.random() * 601);
+    // Add random 0-900 seconds (0 to 15 minutes)
+    const randomSeconds = Math.floor(Math.random() * 901);
     return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 
 /**
  * Compute the first run time.
- * If current minute < 10, pick a random second between (now + 30s) and the 10-minute mark.
- * Otherwise, pick next hour random 0-10 minutes (0-600s).
+ * If current minute < 15, pick a random second between (now + 30s) and the 15-minute mark.
+ * Otherwise, pick next hour random 0-15 minutes (0-900s).
  * Returns absolute Date object.
  */
 function computeFirstRunTime() {
     const now = new Date();
     const currentMinute = now.getMinutes();
 
-    if (currentMinute < 10) {
-        // Still within the 10-minute window of the current hour
-        const startOfTenMinMark = new Date(now);
-        startOfTenMinMark.setMinutes(10);
-        startOfTenMinMark.setSeconds(0);
-        startOfTenMinMark.setMilliseconds(0);
+    if (currentMinute < 15) {
+        // Still within the 15-minute window of the current hour
+        const startOfFifteenMinMark = new Date(now);
+        startOfFifteenMinMark.setMinutes(15);
+        startOfFifteenMinMark.setSeconds(0);
+        startOfFifteenMinMark.setMilliseconds(0);
 
         const minTime = now.getTime() + 30000; // current time + 30 seconds
-        const maxTime = startOfTenMinMark.getTime();
+        const maxTime = startOfFifteenMinMark.getTime();
 
         if (minTime < maxTime) {
             const randomTime = minTime + Math.random() * (maxTime - minTime);
@@ -189,14 +189,14 @@ function computeFirstRunTime() {
         }
     }
 
-    // Too late for this hour (or < 30s left), schedule next hour 0-10 min window
+    // Too late for this hour (or < 30s left), schedule next hour 0-15 min window
     const nextRun = new Date(now);
     nextRun.setHours(nextRun.getHours() + 1);
     nextRun.setMinutes(0);
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
 
-    const randomSeconds = Math.floor(Math.random() * 601);
+    const randomSeconds = Math.floor(Math.random() * 901);
     return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 

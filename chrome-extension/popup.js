@@ -420,7 +420,14 @@ function addLog(type, msg, time) {
 
     logs.unshift({ type, msg, time: entryTime });
     if (logs.length > 50) logs.length = 50;
-    chrome.storage.local.set({ captureLogs: logs });
+
+    // Use read-modify-write to not overwrite background logs generated while popup is open
+    chrome.storage.local.get('captureLogs', (data) => {
+        const storedLogs = data.captureLogs || [];
+        storedLogs.unshift({ type, msg, time: entryTime });
+        if (storedLogs.length > 50) storedLogs.length = 50;
+        chrome.storage.local.set({ captureLogs: storedLogs });
+    });
 }
 
 // ─── Render Log Entry UI Only ───
