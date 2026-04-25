@@ -491,7 +491,7 @@ def capture():
         # Build caption
         caption = (
             f"BC BLĐ: Hiện tại {active} TB đang hoạt động, " +
-            (f"{low_wind} TB dừng do tốc độ gió thấp, " if low_wind > 0 else "") +
+            (f"{low_wind} TB dừng do tốc độ gió thấp, " if low_wind > 0 and safe_float(aws) < 6 else "") +
             (f"{m_num} TB dừng do đang bảo trì, " if m_num > 0 else "") +
             (f"{f_num} TB dừng do bị lỗi, " if f_num > 0 else "") +
             f"tốc độ gió {aws} m/s, "

@@ -17,13 +17,16 @@ const logs = [];
 // ─── Test Scenarios: mock data for each caption case ───
 // TB values: >0 = active, <=0 = inactive
 // low_wind = inactive_count - F - M
+// Điều kiện hiển thị "gió thấp": low_wind > 0 AND AWS < 6
 const TEST_SCENARIOS = {
     // All active, no issues
     normal: { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false },
     // All active + 22h report
     '22h': { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true },
-    // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3
+    // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3, AWS<6 → hiện "gió thấp"
     low_wind: { DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    // Wind high AWS: 3 TB inactive, F=0, M=0 → low_wind=3, nhưng AWS>=6 → KHÔNG hiện "gió thấp"
+    wind_high_aws: { DC: '12', AWS: '7.5', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
     // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0
     maintenance: { DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false },
     // Error only: 1 TB inactive, F=1, M=0 → low_wind=0
