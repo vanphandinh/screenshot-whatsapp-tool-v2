@@ -484,6 +484,8 @@ def capture():
             m_num = int(safe_float(m_val))
             active = dc_num - inactive_tb_count
             low_wind = max(0, inactive_tb_count - f_num - m_num)
+            if low_wind > 0 and safe_float(aws) >= 6:
+                active += low_wind
         except ValueError:
             log(f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}", "ERROR")
             return jsonify({"success": False, "error": f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}"}), 400

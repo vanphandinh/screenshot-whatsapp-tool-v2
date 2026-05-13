@@ -9,7 +9,8 @@ let config = {
     serverUrl: 'http://localhost:5001',
     targetUrl: '',
     selectors: {},
-    autoCapture: false
+    autoCapture: false,
+    scheduleMode: '15min'
 };
 
 const logs = [];
@@ -54,6 +55,12 @@ async function init() {
     document.getElementById('inputServerUrl').value = config.serverUrl || 'http://localhost:5001';
     document.getElementById('toggleAutoCapture').checked = config.autoCapture !== false;
     document.getElementById('autoCaptureLabel').textContent = config.autoCapture !== false ? 'Bật' : 'Tắt';
+
+    // Load schedule mode
+    const mode = config.scheduleMode || '15min';
+    const modeRadio = document.querySelector(`input[name="scheduleMode"][value="${mode}"]`);
+    if (modeRadio) modeRadio.checked = true;
+    updateScheduleModeHelp(mode);
 
     // Load schedule state
     await refreshScheduleStatus();
@@ -125,6 +132,13 @@ function bindEvents() {
     // Auto-capture toggle
     document.getElementById('toggleAutoCapture').addEventListener('change', (e) => {
         document.getElementById('autoCaptureLabel').textContent = e.target.checked ? 'Bật' : 'Tắt';
+    });
+
+    // Schedule mode radio buttons
+    document.querySelectorAll('input[name="scheduleMode"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            updateScheduleModeHelp(e.target.value);
+        });
     });
 
     // Listen for picker results from content script
@@ -361,9 +375,12 @@ async function saveSettings() {
         }
     }
 
+    const scheduleMode = document.querySelector('input[name="scheduleMode"]:checked')?.value || '15min';
+
     config.targetUrl = targetUrl;
     config.serverUrl = serverUrl;
     config.autoCapture = document.getElementById('toggleAutoCapture').checked;
+    config.scheduleMode = scheduleMode;
 
     await saveConfigToBackground();
     addLog('success', 'Cài đặt đã được lưu');
@@ -483,6 +500,17 @@ function sendMsg(msg) {
             resolve({ success: false, error: err.message });
         }
     });
+}
+
+// ─── Helper: Update schedule mode help text ───
+function updateScheduleModeHelp(mode) {
+    const helpEl = document.getElementById('scheduleModeHelp');
+    if (!helpEl) return;
+    if (mode === '30min') {
+        helpEl.textContent = 'Random từ giây thứ 0 đến 1800 (phút thứ 0 → 30) mỗi giờ';
+    } else {
+        helpEl.textContent = 'Random từ giây thứ 0 đến 900 (phút thứ 0 → 15) mỗi giờ';
+    }
 }
 
 // ─── Helper: Escape HTML ───

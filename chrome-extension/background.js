@@ -1,7 +1,7 @@
 // =============================================================================
 // Background Service Worker — DOM Data Capture Extension
 // Scheduling logic matching main.py:
-//   - Run every hour at random minute 0-15
+//   - Run every hour at random minute within configured window
 //   - Retry in 5 minutes on failure
 //   - Auto-start on extension load
 // =============================================================================
@@ -12,7 +12,8 @@ const DEFAULT_CONFIG = {
     intervalMinutes: 60,
     selectors: {},
     autoCapture: false,  // Default OFF as requested
-    retryMinutes: 5
+    retryMinutes: 5,
+    scheduleMode: '15min' // '15min' = 0-15 phút, '30min' = 0-30 phút
 };
 // ─── Freeze page by injecting into MAIN world ───
 // This function runs in the page's REAL JavaScript context (not isolated world)
@@ -143,13 +144,33 @@ async function saveScheduleState(state) {
 
 // ─── Scheduling logic (mirrors main.py) ───
 
-function computeNextRunTime(success) {
+/**
+ * Get the max random seconds based on schedule mode.
+ * '15min' → 901 seconds (0-900, i.e. 0-15 minutes)
+ * '30min' → 1801 seconds (0-1800, i.e. 0-30 minutes)
+ */
+function getMaxRandomSeconds(mode) {
+    return mode === '30min' ? 1801 : 901;
+}
+
+/**
+ * Get the minute window limit based on schedule mode.
+ * '15min' → 15, '30min' → 30
+ */
+function getMinuteWindow(mode) {
+    return mode === '30min' ? 30 : 15;
+}
+
+async function computeNextRunTime(success) {
     const now = new Date();
 
     if (!success) {
         // Failed → retry in 5 minutes (precise)
         return new Date(now.getTime() + 5 * 60000);
     }
+
+    const config = await getConfig();
+    const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
 
     // Success → calculate start of next hour
     const nextRun = new Date(now);
@@ -158,30 +179,33 @@ function computeNextRunTime(success) {
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
 
-    // Add random 0-900 seconds (0 to 15 minutes)
-    const randomSeconds = Math.floor(Math.random() * 901);
+    // Add random seconds within the configured window
+    const randomSeconds = Math.floor(Math.random() * maxSeconds);
     return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 
 /**
  * Compute the first run time.
- * If current minute < 15, pick a random second between (now + 30s) and the 15-minute mark.
- * Otherwise, pick next hour random 0-15 minutes (0-900s).
+ * If current minute < window limit, pick a random second between (now + 30s) and the window mark.
+ * Otherwise, pick next hour random within window.
  * Returns absolute Date object.
  */
-function computeFirstRunTime() {
+async function computeFirstRunTime() {
     const now = new Date();
     const currentMinute = now.getMinutes();
+    const config = await getConfig();
+    const minuteWindow = getMinuteWindow(config.scheduleMode);
+    const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
 
-    if (currentMinute < 15) {
-        // Still within the 15-minute window of the current hour
-        const startOfFifteenMinMark = new Date(now);
-        startOfFifteenMinMark.setMinutes(15);
-        startOfFifteenMinMark.setSeconds(0);
-        startOfFifteenMinMark.setMilliseconds(0);
+    if (currentMinute < minuteWindow) {
+        // Still within the window of the current hour
+        const windowEnd = new Date(now);
+        windowEnd.setMinutes(minuteWindow);
+        windowEnd.setSeconds(0);
+        windowEnd.setMilliseconds(0);
 
         const minTime = now.getTime() + 30000; // current time + 30 seconds
-        const maxTime = startOfFifteenMinMark.getTime();
+        const maxTime = windowEnd.getTime();
 
         if (minTime < maxTime) {
             const randomTime = minTime + Math.random() * (maxTime - minTime);
@@ -189,22 +213,22 @@ function computeFirstRunTime() {
         }
     }
 
-    // Too late for this hour (or < 30s left), schedule next hour 0-15 min window
+    // Too late for this hour (or < 30s left), schedule next hour within window
     const nextRun = new Date(now);
     nextRun.setHours(nextRun.getHours() + 1);
     nextRun.setMinutes(0);
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
 
-    const randomSeconds = Math.floor(Math.random() * 901);
+    const randomSeconds = Math.floor(Math.random() * maxSeconds);
     return new Date(nextRun.getTime() + randomSeconds * 1000);
 }
 
 // ─── Schedule next capture alarm ───
 async function scheduleNext(success, reason) {
     const nextRun = success !== null
-        ? computeNextRunTime(success)
-        : computeFirstRunTime();
+        ? await computeNextRunTime(success)
+        : await computeFirstRunTime();
 
     const nextRunISO = nextRun.toISOString();
 
@@ -487,10 +511,11 @@ async function startScheduler() {
         return;
     }
 
-    const nextRun = computeFirstRunTime();
+    const nextRun = await computeFirstRunTime();
     console.log(`[DOMCapture] Scheduler started. First run at ${nextRun.toISOString()}`);
     await scheduleNext(null, 'Scheduler started');
-    await addCaptureLog('info', `Scheduler started. First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
+    const modeLabel = config.scheduleMode === '30min' ? '0-30 phút' : '0-15 phút';
+    await addCaptureLog('info', `Scheduler started (${modeLabel}). First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
 }
 
 // ─── Stop scheduling ───
