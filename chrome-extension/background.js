@@ -13,7 +13,8 @@ const DEFAULT_CONFIG = {
     selectors: {},
     autoCapture: false,  // Default OFF as requested
     retryMinutes: 5,
-    scheduleMode: '15min' // '15min' = 0-15 phút, '30min' = 0-30 phút
+    scheduleMode: '15min', // '15min' = 0-15 phút, '30min' = 0-30 phút
+    intervalHours: 1       // 1 = mỗi giờ, 2 = mỗi 2 giờ
 };
 // ─── Freeze page by injecting into MAIN world ───
 // This function runs in the page's REAL JavaScript context (not isolated world)
@@ -171,10 +172,11 @@ async function computeNextRunTime(success) {
 
     const config = await getConfig();
     const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
+    const intervalHours = config.intervalHours || 1;
 
-    // Success → calculate start of next hour
+    // Success → calculate start of next interval window
     const nextRun = new Date(now);
-    nextRun.setHours(nextRun.getHours() + 1);
+    nextRun.setHours(nextRun.getHours() + intervalHours);
     nextRun.setMinutes(0);
     nextRun.setSeconds(0);
     nextRun.setMilliseconds(0);
@@ -196,7 +198,6 @@ async function computeFirstRunTime() {
     const config = await getConfig();
     const minuteWindow = getMinuteWindow(config.scheduleMode);
     const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
-
     if (currentMinute < minuteWindow) {
         // Still within the window of the current hour
         const windowEnd = new Date(now);
@@ -515,7 +516,8 @@ async function startScheduler() {
     console.log(`[DOMCapture] Scheduler started. First run at ${nextRun.toISOString()}`);
     await scheduleNext(null, 'Scheduler started');
     const modeLabel = config.scheduleMode === '30min' ? '0-30 phút' : '0-15 phút';
-    await addCaptureLog('info', `Scheduler started (${modeLabel}). First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
+    const intervalLabel = (config.intervalHours || 1) === 2 ? 'mỗi 2 giờ' : 'mỗi giờ';
+    await addCaptureLog('info', `Scheduler started (${intervalLabel}, ${modeLabel}). First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
 }
 
 // ─── Stop scheduling ───

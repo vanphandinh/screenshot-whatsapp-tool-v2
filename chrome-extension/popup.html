@@ -135,11 +135,26 @@
                     </label>
                     <span id="autoCaptureLabel">Tắt</span>
                 </div>
-                <small class="help-text">Chạy mỗi giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.</small>
+                <small class="help-text" id="autoCaptureHelp">Chạy mỗi giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.</small>
+            </div>
+
+            <div class="form-group" id="intervalHoursGroup">
+                <label>🔄 Chu kỳ chạy</label>
+                <div class="schedule-mode-options">
+                    <label class="schedule-mode-option">
+                        <input type="radio" name="intervalHours" value="1" checked>
+                        <span class="schedule-mode-label">Mỗi 1 giờ</span>
+                    </label>
+                    <label class="schedule-mode-option">
+                        <input type="radio" name="intervalHours" value="2">
+                        <span class="schedule-mode-label">Mỗi 2 giờ</span>
+                    </label>
+                </div>
+                <small class="help-text" id="intervalHoursHelp">Chạy tự động mỗi 1 giờ</small>
             </div>
 
             <div class="form-group" id="scheduleModeGroup">
-                <label>🕐 Khoảng thời gian chạy</label>
+                <label>🕐 Khoảng ngẫu nhiên</label>
                 <div class="schedule-mode-options">
                     <label class="schedule-mode-option">
                         <input type="radio" name="scheduleMode" value="15min" checked>

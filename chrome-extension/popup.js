@@ -10,7 +10,8 @@ let config = {
     targetUrl: '',
     selectors: {},
     autoCapture: false,
-    scheduleMode: '15min'
+    scheduleMode: '15min',
+    intervalHours: 1
 };
 
 const logs = [];
@@ -55,6 +56,13 @@ async function init() {
     document.getElementById('inputServerUrl').value = config.serverUrl || 'http://localhost:5001';
     document.getElementById('toggleAutoCapture').checked = config.autoCapture !== false;
     document.getElementById('autoCaptureLabel').textContent = config.autoCapture !== false ? 'Bật' : 'Tắt';
+
+    // Load interval hours
+    const intervalHours = config.intervalHours || 1;
+    const intervalRadio = document.querySelector(`input[name="intervalHours"][value="${intervalHours}"]`);
+    if (intervalRadio) intervalRadio.checked = true;
+    updateIntervalHoursHelp(intervalHours);
+    updateAutoCaptureHelp(intervalHours);
 
     // Load schedule mode
     const mode = config.scheduleMode || '15min';
@@ -132,6 +140,15 @@ function bindEvents() {
     // Auto-capture toggle
     document.getElementById('toggleAutoCapture').addEventListener('change', (e) => {
         document.getElementById('autoCaptureLabel').textContent = e.target.checked ? 'Bật' : 'Tắt';
+    });
+
+    // Interval hours radio buttons
+    document.querySelectorAll('input[name="intervalHours"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            updateIntervalHoursHelp(val);
+            updateAutoCaptureHelp(val);
+        });
     });
 
     // Schedule mode radio buttons
@@ -376,11 +393,13 @@ async function saveSettings() {
     }
 
     const scheduleMode = document.querySelector('input[name="scheduleMode"]:checked')?.value || '15min';
+    const intervalHours = parseInt(document.querySelector('input[name="intervalHours"]:checked')?.value || '1');
 
     config.targetUrl = targetUrl;
     config.serverUrl = serverUrl;
     config.autoCapture = document.getElementById('toggleAutoCapture').checked;
     config.scheduleMode = scheduleMode;
+    config.intervalHours = intervalHours;
 
     await saveConfigToBackground();
     addLog('success', 'Cài đặt đã được lưu');
@@ -502,14 +521,36 @@ function sendMsg(msg) {
     });
 }
 
+// ─── Helper: Update interval hours help text ───
+function updateIntervalHoursHelp(hours) {
+    const helpEl = document.getElementById('intervalHoursHelp');
+    if (!helpEl) return;
+    if (hours === 2) {
+        helpEl.textContent = 'Chạy tự động mỗi 2 giờ kể từ lần chạy đầu tiên';
+    } else {
+        helpEl.textContent = 'Chạy tự động mỗi 1 giờ';
+    }
+}
+
+// ─── Helper: Update auto capture help text ───
+function updateAutoCaptureHelp(hours) {
+    const helpEl = document.getElementById('autoCaptureHelp');
+    if (!helpEl) return;
+    if (hours === 2) {
+        helpEl.textContent = 'Chạy mỗi 2 giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.';
+    } else {
+        helpEl.textContent = 'Chạy mỗi giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.';
+    }
+}
+
 // ─── Helper: Update schedule mode help text ───
 function updateScheduleModeHelp(mode) {
     const helpEl = document.getElementById('scheduleModeHelp');
     if (!helpEl) return;
     if (mode === '30min') {
-        helpEl.textContent = 'Random từ giây thứ 0 đến 1800 (phút thứ 0 → 30) mỗi giờ';
+        helpEl.textContent = 'Random từ giây thứ 0 đến 1800 (phút thứ 0 → 30) mỗi chu kỳ';
     } else {
-        helpEl.textContent = 'Random từ giây thứ 0 đến 900 (phút thứ 0 → 15) mỗi giờ';
+        helpEl.textContent = 'Random từ giây thứ 0 đến 900 (phút thứ 0 → 15) mỗi chu kỳ';
     }
 }
 
