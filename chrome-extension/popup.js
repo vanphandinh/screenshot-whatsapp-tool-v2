@@ -58,7 +58,7 @@ async function init() {
     document.getElementById('autoCaptureLabel').textContent = config.autoCapture !== false ? 'Bật' : 'Tắt';
 
     // Load interval hours
-    const intervalHours = config.intervalHours || 1;
+    const intervalHours = config.intervalHours !== undefined ? config.intervalHours : 1;
     const intervalRadio = document.querySelector(`input[name="intervalHours"][value="${intervalHours}"]`);
     if (intervalRadio) intervalRadio.checked = true;
     updateIntervalHoursHelp(intervalHours);
@@ -168,6 +168,28 @@ function bindEvents() {
         }
         if (msg.type === 'PICKER_CANCELLED') {
             addLog('info', 'Picker đã bị hủy');
+        }
+    });
+
+    // Auto-update UI when background script changes storage
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local') {
+            if (changes.scheduleState) {
+                refreshScheduleStatus();
+            }
+            if (changes.captureLogs) {
+                const newLogs = changes.captureLogs.newValue || [];
+                // Only refresh logs if there is a new log added to avoid unnecessary UI flashing
+                if (newLogs.length > 0) {
+                    const latestLog = newLogs[0];
+                    // Make sure we haven't already added this exact log from the popup itself
+                    if (logs.length === 0 || logs[0].time !== latestLog.time) {
+                        renderLogEntry(latestLog.type, latestLog.msg, latestLog.time, false);
+                        logs.unshift(latestLog);
+                        if (logs.length > 50) logs.length = 50;
+                    }
+                }
+            }
         }
     });
 }
