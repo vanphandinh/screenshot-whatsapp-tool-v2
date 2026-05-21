@@ -515,38 +515,40 @@ def capture():
             if test_phone:
                 target_number = test_phone
 
-        send_success = False
-        if whatsapp_client and whatsapp_creator.state == 'CONNECTED':
-            if not target_number:
-                log("Target WhatsApp number not configured.", "ERROR")
-            else:
-                try:
-                    msg_type_log = "TEST" if is_test else "LIVE"
-                    if screenshot_path:
-                        log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
-                        whatsapp_client.sendImage(target_number, screenshot_path, caption=caption)
-                    else:
-                        log(f"Sending text to {target_number} ({msg_type_log})...", "ACTION")
-                        whatsapp_client.sendText(target_number, caption)
-                    send_success = True
-                except Exception as e:
-                    log(f"WhatsApp sending error: {e}", "ERROR")
-        else:
-            log("WhatsApp client not connected or initialized.", "ERROR")
+        # ★ Send WhatsApp in background thread so the HTTP response returns immediately.
+        # The extension's service worker gets killed by Chrome if we block too long.
+        def send_whatsapp_async():
+            try:
+                if not whatsapp_client or whatsapp_creator.state != 'CONNECTED':
+                    log("WhatsApp client not connected or initialized.", "ERROR")
+                    return
+                if not target_number:
+                    log("Target WhatsApp number not configured.", "ERROR")
+                    return
 
-        if send_success:
-            log("Report sent successfully!", "SUCCESS")
-            return jsonify({
-                "success": True,
-                "caption": caption,
-                "values": {
-                    "DC": dc, "AWS": aws, "TAP": tap,
-                    "F": f_val, "M": m_val, "DEG": deg,
-                    "active": str(active)
-                }
-            })
-        else:
-            return jsonify({"success": False, "error": "WhatsApp sending failed"}), 500
+                msg_type_log = "TEST" if is_test else "LIVE"
+                if screenshot_path:
+                    log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
+                    whatsapp_client.sendImage(target_number, screenshot_path, caption=caption)
+                else:
+                    log(f"Sending text to {target_number} ({msg_type_log})...", "ACTION")
+                    whatsapp_client.sendText(target_number, caption)
+                log("Report sent successfully!", "SUCCESS")
+            except Exception as e:
+                log(f"WhatsApp sending error: {e}", "ERROR")
+
+        threading.Thread(target=send_whatsapp_async, daemon=True).start()
+
+        # Return immediately — don't wait for WhatsApp to finish
+        return jsonify({
+            "success": True,
+            "caption": caption,
+            "values": {
+                "DC": dc, "AWS": aws, "TAP": tap,
+                "F": f_val, "M": m_val, "DEG": deg,
+                "active": str(active)
+            }
+        })
 
     except Exception as e:
         log(f"Capture processing error: {e}", "ERROR")

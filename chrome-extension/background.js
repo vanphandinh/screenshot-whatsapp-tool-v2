@@ -112,6 +112,25 @@ async function injectFreeze(tabId) {
     }
 }
 
+// ─── Send message with timeout (prevents hanging if content script doesn't respond) ───
+function sendMessageWithTimeout(tabId, message, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`sendMessage timed out after ${timeoutMs / 1000}s`));
+        }, timeoutMs);
+
+        chrome.tabs.sendMessage(tabId, message)
+            .then(response => {
+                clearTimeout(timer);
+                resolve(response);
+            })
+            .catch(err => {
+                clearTimeout(timer);
+                reject(err);
+            });
+    });
+}
+
 // ─── Get config from storage ───
 async function getConfig() {
     return new Promise((resolve) => {
@@ -438,7 +457,7 @@ async function getTargetTab(targetUrl) {
 // ─── Inject content script if needed ───
 async function ensureContentScript(tabId) {
     try {
-        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        await sendMessageWithTimeout(tabId, { type: 'PING' }, 5000);
     } catch {
         await chrome.scripting.executeScript({
             target: { tabId },
@@ -519,11 +538,11 @@ async function captureData(force22h = false, isTest = false) {
         // 5. Wait 1 second for freeze to take effect and last XHR responses to finish
         await new Promise(r => setTimeout(r, 1000));
 
-        // Extract data from selectors
-        const response = await chrome.tabs.sendMessage(tab.id, {
+        // Extract data from selectors (with 30s timeout to prevent hanging)
+        const response = await sendMessageWithTimeout(tab.id, {
             type: 'EXTRACT_DATA',
             selectors: config.selectors
-        });
+        }, 30000);
 
         if (!response || !response.ok) {
             console.log('[DOMCapture] Extraction failed. Flagging for reload on next attempt:', tab.id);
@@ -587,7 +606,7 @@ async function sendToServer(serverUrl, payload) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(60000) // 60s timeout to prevent hanging the Service Worker
+            signal: AbortSignal.timeout(180000) // 180s timeout — server needs time for screenshot + WhatsApp
         });
 
         if (res.ok) {
@@ -627,6 +646,13 @@ async function runScheduledJob() {
         return;
     }
 
+    // ★ OPTIMISTIC SCHEDULING: Schedule the next alarm BEFORE running the job.
+    // Chrome MV3 kills the service worker during long-running capture jobs,
+    // preventing scheduleNext() from ever being called. By pre-scheduling,
+    // the next alarm exists even if the SW dies mid-job.
+    const preScheduledState = await scheduleNext(true, 'Pre-scheduled (job running...)');
+    console.log('[DOMCapture] ✅ Next run pre-scheduled at', preScheduledState.nextRun);
+
     // Determine if this run should include DEG report (sản lượng đầu cực)
     const currentHour = new Date().getHours();
     let force22h = false;
@@ -646,6 +672,7 @@ async function runScheduledJob() {
     const isTestMode = (intervalHours === 0);
 
     const result = await captureData(force22h, isTestMode);
+    console.log('[DOMCapture] captureData returned:', JSON.stringify({ success: result.success, error: result.error }));
 
     // Store last capture result
     chrome.storage.local.set({
@@ -660,15 +687,20 @@ async function runScheduledJob() {
         if (force22h) {
             await markDegReportSent();
             console.log('[DOMCapture] ✅ DEG report marked as sent for today');
-            // Clear fallback alarm since report was sent
             await chrome.alarms.clear('dom-capture-deg-fallback');
         }
 
-        console.log('[DOMCapture] ✅ Job succeeded! Scheduling next run.');
+        console.log('[DOMCapture] ✅ Job succeeded! Next run already pre-scheduled.');
         await addCaptureLog('success', `Capture thành công. ${result.serverResponse?.caption || ''}`);
-        await scheduleNext(true, 'Success');
+        await saveScheduleState({
+            ...preScheduledState,
+            status: 'success',
+            lastResult: 'Success',
+            lastRunTime: new Date().toISOString()
+        });
     } else {
-        console.log(`[DOMCapture] ❌ Job failed: ${result.error}. Retrying in 5 min.`);
+        // Job failed — override the pre-scheduled alarm with a 5-minute retry
+        console.log(`[DOMCapture] ❌ Job failed: ${result.error}. Overriding schedule with 5-min retry.`);
         await addCaptureLog('error', `Capture thất bại: ${result.error}. Retry trong 5 phút.`);
         await scheduleNext(false, result.error);
     }
@@ -718,7 +750,26 @@ async function runDegFallbackJob() {
 
 // ─── Alarm handler ───
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+    // Safety watchdog: if this fires, the main job hung and SW was killed
+    if (alarm.name === 'dom-capture-watchdog') {
+        console.warn('[DOMCapture] ⚠️ Watchdog fired — previous job likely hung. Rescheduling...');
+        await addCaptureLog('error', 'Job trước đó bị treo (watchdog). Đang lên lịch lại...');
+        try {
+            const config = await getConfig();
+            if (config.autoCapture) {
+                await scheduleNext(false, 'Watchdog recovery');
+            }
+        } catch (e) {
+            console.error('[DOMCapture] Watchdog recovery failed:', e);
+        }
+        return;
+    }
+
     if (alarm.name === 'dom-capture-scheduled') {
+        // Set a watchdog alarm BEFORE running the job.
+        // If the job hangs and the SW dies, this alarm will fire and reschedule.
+        chrome.alarms.create('dom-capture-watchdog', { delayInMinutes: 4 });
+
         try {
             await runScheduledJob();
         } catch (err) {
@@ -731,6 +782,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
                 console.error('[DOMCapture] ❌ Failed to schedule retry:', schedErr);
             }
         }
+
+        // Job completed (success or error) — cancel the watchdog
+        await chrome.alarms.clear('dom-capture-watchdog');
     }
 
     if (alarm.name === 'dom-capture-deg-fallback') {
@@ -771,6 +825,7 @@ async function startScheduler() {
 async function stopScheduler() {
     await chrome.alarms.clear('dom-capture-scheduled');
     await chrome.alarms.clear('dom-capture-deg-fallback');
+    await chrome.alarms.clear('dom-capture-watchdog');
     await saveScheduleState({ status: 'disabled', nextRun: null, lastResult: null });
     await addCaptureLog('info', 'Scheduler stopped.');
     console.log('[DOMCapture] Scheduler stopped.');
@@ -782,7 +837,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Manual capture — add 500ms delay to allow popup to close
         setTimeout(async () => {
             let force22h = msg.force22h || false;
-            
+
             // Auto-detect 22h/23h in manual mode if not already sent today
             const currentHour = new Date().getHours();
             if (currentHour === 22 || currentHour === 23) {
