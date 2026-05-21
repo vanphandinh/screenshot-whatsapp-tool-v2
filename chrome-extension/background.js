@@ -498,7 +498,18 @@ async function runScheduledJob() {
 // ─── Alarm handler ───
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'dom-capture-scheduled') {
-        await runScheduledJob();
+        try {
+            await runScheduledJob();
+        } catch (err) {
+            console.error('[DOMCapture] ❌ Unhandled error in scheduled job:', err);
+            await addCaptureLog('error', `Lỗi không mong muốn: ${err.message}. Retry trong 5 phút.`);
+            // Always schedule next run so auto-capture doesn't stop forever
+            try {
+                await scheduleNext(false, `Unhandled error: ${err.message}`);
+            } catch (schedErr) {
+                console.error('[DOMCapture] ❌ Failed to schedule retry:', schedErr);
+            }
+        }
     }
 });
 
@@ -512,12 +523,14 @@ async function startScheduler() {
         return;
     }
 
-    const nextRun = await computeFirstRunTime();
-    console.log(`[DOMCapture] Scheduler started. First run at ${nextRun.toISOString()}`);
-    await scheduleNext(null, 'Scheduler started');
+    // scheduleNext(null, ...) internally calls computeFirstRunTime() and returns the state
+    const state = await scheduleNext(null, 'Scheduler started');
+    const actualNextRun = state.nextRun ? new Date(state.nextRun) : null;
+    const timeStr = actualNextRun ? actualNextRun.toLocaleTimeString('vi-VN') : '???';
+    console.log(`[DOMCapture] Scheduler started. First run at ${state.nextRun}`);
     const modeLabel = config.scheduleMode === '30min' ? '0-30 phút' : '0-15 phút';
     const intervalLabel = (config.intervalHours || 1) === 2 ? 'mỗi 2 giờ' : 'mỗi giờ';
-    await addCaptureLog('info', `Scheduler started (${intervalLabel}, ${modeLabel}). First run at ${nextRun.toLocaleTimeString('vi-VN')}`);
+    await addCaptureLog('info', `Scheduler started (${intervalLabel}, ${modeLabel}). First run at ${timeStr}`);
 }
 
 // ─── Stop scheduling ───
@@ -605,12 +618,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === 'SAVE_CONFIG') {
-        saveConfig(msg.config).then(() => {
+        saveConfig(msg.config).then(async () => {
             // Update scheduler based on autoCapture toggle
             if (msg.config.autoCapture) {
-                startScheduler();
+                await startScheduler();
             } else {
-                stopScheduler();
+                await stopScheduler();
             }
             sendResponse({ ok: true });
         });
