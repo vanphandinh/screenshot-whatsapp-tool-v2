@@ -273,7 +273,6 @@ async function scheduleDegFallbackIfNeeded() {
 
     // Only schedule if it's in the future
     if (fallbackTime.getTime() > now.getTime()) {
-        await chrome.alarms.clear('dom-capture-deg-fallback');
         chrome.alarms.create('dom-capture-deg-fallback', {
             when: fallbackTime.getTime()
         });
@@ -311,7 +310,13 @@ async function computeNextRunTime(success) {
 
     const config = await getConfig();
     const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
-    const intervalHours = config.intervalHours || 1;
+    let intervalHours = parseInt(config.intervalHours, 10);
+    if (isNaN(intervalHours)) intervalHours = 1;
+
+    if (intervalHours === 0) {
+        // Debug mode: schedule exactly 1 minute from now
+        return new Date(now.getTime() + 60000);
+    }
 
     // Success → calculate start of next interval window
     const nextRun = new Date(now);
@@ -337,6 +342,14 @@ async function computeFirstRunTime() {
     const config = await getConfig();
     const minuteWindow = getMinuteWindow(config.scheduleMode);
     const maxSeconds = getMaxRandomSeconds(config.scheduleMode);
+    let intervalHours = parseInt(config.intervalHours, 10);
+    if (isNaN(intervalHours)) intervalHours = 1;
+
+    if (intervalHours === 0) {
+        // Debug mode: schedule exactly 1 minute from now
+        return new Date(now.getTime() + 60000);
+    }
+
     if (currentMinute < minuteWindow) {
         // Still within the window of the current hour
         const windowEnd = new Date(now);
@@ -372,7 +385,7 @@ async function scheduleNext(success, reason) {
 
     const nextRunISO = nextRun.toISOString();
 
-    await chrome.alarms.clear('dom-capture-scheduled');
+    // Create the new alarm (automatically replaces any existing alarm with the same name)
     chrome.alarms.create('dom-capture-scheduled', {
         when: nextRun.getTime()
     });
@@ -573,7 +586,8 @@ async function sendToServer(serverUrl, payload) {
         const res = await fetch(`${serverUrl}/api/capture`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(60000) // 60s timeout to prevent hanging the Service Worker
         });
 
         if (res.ok) {
@@ -627,7 +641,11 @@ async function runScheduledJob() {
         }
     }
 
-    const result = await captureData(force22h);
+    let intervalHours = parseInt(config.intervalHours, 10);
+    if (isNaN(intervalHours)) intervalHours = 1;
+    const isTestMode = (intervalHours === 0);
+
+    const result = await captureData(force22h, isTestMode);
 
     // Store last capture result
     chrome.storage.local.set({

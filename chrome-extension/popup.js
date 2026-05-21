@@ -527,6 +527,8 @@ function updateIntervalHoursHelp(hours) {
     if (!helpEl) return;
     if (hours === 2) {
         helpEl.textContent = 'Chạy tự động mỗi 2 giờ kể từ lần chạy đầu tiên';
+    } else if (hours === 0) {
+        helpEl.textContent = 'Chạy liên tục mỗi 1 phút để test tính năng lập lịch';
     } else {
         helpEl.textContent = 'Chạy tự động mỗi 1 giờ';
     }
@@ -538,6 +540,8 @@ function updateAutoCaptureHelp(hours) {
     if (!helpEl) return;
     if (hours === 2) {
         helpEl.textContent = 'Chạy mỗi 2 giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.';
+    } else if (hours === 0) {
+        helpEl.textContent = 'Chạy chính xác mỗi 1 phút. Dữ liệu ĐƯỢC GỬI VÀO NHÓM TEST.';
     } else {
         helpEl.textContent = 'Chạy mỗi giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.';
     }
