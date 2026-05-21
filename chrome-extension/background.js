@@ -143,6 +143,145 @@ async function saveScheduleState(state) {
     });
 }
 
+// ─── DEG Report (sản lượng đầu cực) daily tracking ───
+
+/**
+ * Get today's date string in YYYY-MM-DD format (local time).
+ */
+function getTodayDateString() {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Check if the DEG report has already been sent today.
+ */
+async function isDegReportSentToday() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get('degReportDate', (data) => {
+            resolve(data.degReportDate === getTodayDateString());
+        });
+    });
+}
+
+/**
+ * Mark the DEG report as sent for today.
+ */
+async function markDegReportSent() {
+    return new Promise((resolve) => {
+        chrome.storage.local.set({ degReportDate: getTodayDateString() }, resolve);
+    });
+}
+
+/**
+ * Check if the regular schedule will hit hour 22.
+ * For interval=1, every hour is hit so 22 is always covered.
+ * For interval=2, check if any scheduled hour equals 22.
+ * We determine the schedule's starting hour from the first run pattern:
+ *   hours are: startHour, startHour+2, startHour+4, ... mod 24
+ * Since the schedule anchors to the current hour at start, we check
+ * if 22 % intervalHours === currentAnchorHour % intervalHours.
+ */
+function willScheduleHit22(intervalHours) {
+    if (intervalHours <= 1) return true;
+    // For 2h interval: even hours (0,2,4,...,20,22) or odd hours (1,3,...,21,23)
+    // 22 is even, so if the anchor is even, 22 will be hit
+    // General: 22 mod interval === anchor mod interval
+    // Since we schedule at "current hour + interval", the anchor is effectively
+    // determined by the current hour pattern. We check all possible hours:
+    for (let h = 0; h < 24; h += intervalHours) {
+        if (h === 22) return true;
+    }
+    // Also check odd-start pattern
+    for (let h = 1; h < 24; h += intervalHours) {
+        if (h === 22) return true;
+    }
+    return false;
+}
+
+/**
+ * Determine if the current auto-run series will land on hour 22.
+ * Uses the actual next run time to figure out the hour pattern.
+ */
+async function willCurrentScheduleHit22() {
+    const config = await getConfig();
+    const intervalHours = config.intervalHours || 1;
+    if (intervalHours <= 1) return true;
+
+    // Get the schedule state to find the next run hour
+    const state = await getScheduleState();
+    if (!state.nextRun) return false;
+
+    const nextRunDate = new Date(state.nextRun);
+    if (isNaN(nextRunDate.getTime())) return false;
+
+    const nextRunHour = nextRunDate.getHours();
+    // Check if 22 is reachable from this pattern
+    // Pattern: nextRunHour, nextRunHour+interval, nextRunHour+2*interval, ... mod 24
+    for (let i = 0; i < Math.ceil(24 / intervalHours); i++) {
+        const h = (nextRunHour + i * intervalHours) % 24;
+        if (h === 22) return true;
+    }
+    return false;
+}
+
+/**
+ * Schedule the 23h fallback alarm for DEG report if needed.
+ * Only schedules if:
+ *   1. Auto-capture is enabled
+ *   2. Interval is 2h (so 22h might be skipped)
+ *   3. The current schedule pattern won't hit 22h
+ *   4. DEG report hasn't been sent today
+ *   5. It's not already past 23h today
+ */
+async function scheduleDegFallbackIfNeeded() {
+    const config = await getConfig();
+    if (!config.autoCapture) return;
+
+    const intervalHours = config.intervalHours || 1;
+    if (intervalHours <= 1) {
+        // Every hour always hits 22h, no fallback needed
+        await chrome.alarms.clear('dom-capture-deg-fallback');
+        return;
+    }
+
+    const alreadySent = await isDegReportSentToday();
+    if (alreadySent) {
+        await chrome.alarms.clear('dom-capture-deg-fallback');
+        return;
+    }
+
+    const now = new Date();
+    const currentHour = now.getHours();
+
+    // If it's already past 23h, no point scheduling
+    if (currentHour >= 23) {
+        return;
+    }
+
+    // Check if regular schedule will hit 22h
+    const hitsAt22 = await willCurrentScheduleHit22();
+    if (hitsAt22) {
+        // Regular schedule covers 22h, no fallback needed
+        await chrome.alarms.clear('dom-capture-deg-fallback');
+        return;
+    }
+
+    // Schedule fallback at 23:00 today
+    const fallbackTime = new Date(now);
+    fallbackTime.setHours(23, 0, 0, 0);
+
+    // Only schedule if it's in the future
+    if (fallbackTime.getTime() > now.getTime()) {
+        await chrome.alarms.clear('dom-capture-deg-fallback');
+        chrome.alarms.create('dom-capture-deg-fallback', {
+            when: fallbackTime.getTime()
+        });
+        console.log(`[DOMCapture] DEG fallback alarm scheduled at 23:00 (${fallbackTime.toISOString()})`);
+        await addCaptureLog('info', 'Lịch 22h bị bỏ qua → đã lên lịch báo cáo sản lượng đầu cực lúc 23:00');
+    }
+}
+
 // ─── Scheduling logic (mirrors main.py) ───
 
 /**
@@ -474,7 +613,21 @@ async function runScheduledJob() {
         return;
     }
 
-    const result = await captureData();
+    // Determine if this run should include DEG report (sản lượng đầu cực)
+    const currentHour = new Date().getHours();
+    let force22h = false;
+
+    if (currentHour === 22 || currentHour === 23) {
+        const alreadySent = await isDegReportSentToday();
+        if (!alreadySent) {
+            force22h = true;
+            console.log(`[DOMCapture] Current hour is ${currentHour} → including DEG report`);
+        } else {
+            console.log(`[DOMCapture] Current hour is ${currentHour} but DEG report already sent today`);
+        }
+    }
+
+    const result = await captureData(force22h);
 
     // Store last capture result
     chrome.storage.local.set({
@@ -485,13 +638,63 @@ async function runScheduledJob() {
     });
 
     if (result.success) {
-        console.log('[DOMCapture] ✅ Job succeeded! Scheduling next hour.');
+        // If we sent a DEG report, mark it as sent for today
+        if (force22h) {
+            await markDegReportSent();
+            console.log('[DOMCapture] ✅ DEG report marked as sent for today');
+            // Clear fallback alarm since report was sent
+            await chrome.alarms.clear('dom-capture-deg-fallback');
+        }
+
+        console.log('[DOMCapture] ✅ Job succeeded! Scheduling next run.');
         await addCaptureLog('success', `Capture thành công. ${result.serverResponse?.caption || ''}`);
         await scheduleNext(true, 'Success');
     } else {
         console.log(`[DOMCapture] ❌ Job failed: ${result.error}. Retrying in 5 min.`);
         await addCaptureLog('error', `Capture thất bại: ${result.error}. Retry trong 5 phút.`);
         await scheduleNext(false, result.error);
+    }
+
+    // After scheduling next run, check if we need a 23h DEG fallback
+    await scheduleDegFallbackIfNeeded();
+}
+
+// ─── Run the DEG fallback job (23h) ───
+async function runDegFallbackJob() {
+    console.log('[DOMCapture] ════════════════════════════════');
+    console.log('[DOMCapture] Running 23h DEG fallback job...');
+
+    const config = await getConfig();
+    if (!config.autoCapture) {
+        console.log('[DOMCapture] Auto-capture is disabled. Skipping DEG fallback.');
+        return;
+    }
+
+    // Check if DEG report was already sent today (by regular 22h run or manual)
+    const alreadySent = await isDegReportSentToday();
+    if (alreadySent) {
+        console.log('[DOMCapture] DEG report already sent today. Skipping 23h fallback.');
+        await addCaptureLog('info', 'Báo cáo sản lượng đầu cực đã gửi hôm nay → bỏ qua 23h fallback');
+        return;
+    }
+
+    // Run capture with force22h = true
+    const result = await captureData(true);
+
+    chrome.storage.local.set({
+        lastCapture: {
+            time: new Date().toISOString(),
+            result
+        }
+    });
+
+    if (result.success) {
+        await markDegReportSent();
+        console.log('[DOMCapture] ✅ DEG fallback at 23h succeeded!');
+        await addCaptureLog('success', `Báo cáo sản lượng đầu cực 23h thành công. ${result.serverResponse?.caption || ''}`);
+    } else {
+        console.log(`[DOMCapture] ❌ DEG fallback at 23h failed: ${result.error}`);
+        await addCaptureLog('error', `Báo cáo sản lượng đầu cực 23h thất bại: ${result.error}`);
     }
 }
 
@@ -511,6 +714,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             }
         }
     }
+
+    if (alarm.name === 'dom-capture-deg-fallback') {
+        try {
+            await runDegFallbackJob();
+        } catch (err) {
+            console.error('[DOMCapture] ❌ Unhandled error in DEG fallback job:', err);
+            await addCaptureLog('error', `Lỗi báo cáo sản lượng 23h: ${err.message}`);
+        }
+    }
 });
 
 // ─── Start scheduling (called on install and when auto-capture is toggled on) ───
@@ -519,6 +731,7 @@ async function startScheduler() {
     if (!config.autoCapture) {
         console.log('[DOMCapture] Auto-capture disabled. Not scheduling.');
         await chrome.alarms.clear('dom-capture-scheduled');
+        await chrome.alarms.clear('dom-capture-deg-fallback');
         await saveScheduleState({ status: 'disabled', nextRun: null, lastResult: null });
         return;
     }
@@ -531,11 +744,15 @@ async function startScheduler() {
     const modeLabel = config.scheduleMode === '30min' ? '0-30 phút' : '0-15 phút';
     const intervalLabel = (config.intervalHours || 1) === 2 ? 'mỗi 2 giờ' : 'mỗi giờ';
     await addCaptureLog('info', `Scheduler started (${intervalLabel}, ${modeLabel}). First run at ${timeStr}`);
+
+    // Schedule DEG fallback if needed
+    await scheduleDegFallbackIfNeeded();
 }
 
 // ─── Stop scheduling ───
 async function stopScheduler() {
     await chrome.alarms.clear('dom-capture-scheduled');
+    await chrome.alarms.clear('dom-capture-deg-fallback');
     await saveScheduleState({ status: 'disabled', nextRun: null, lastResult: null });
     await addCaptureLog('info', 'Scheduler stopped.');
     console.log('[DOMCapture] Scheduler stopped.');
@@ -545,13 +762,28 @@ async function stopScheduler() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'CAPTURE_NOW') {
         // Manual capture — add 500ms delay to allow popup to close
-        const force22h = msg.force22h || false;
         setTimeout(async () => {
+            let force22h = msg.force22h || false;
+            
+            // Auto-detect 22h/23h in manual mode if not already sent today
+            const currentHour = new Date().getHours();
+            if (currentHour === 22 || currentHour === 23) {
+                const alreadySent = await isDegReportSentToday();
+                if (!alreadySent) {
+                    force22h = true;
+                }
+            }
+
             const result = await captureData(force22h, true); // true because it's a manual test
             chrome.storage.local.set({
                 lastCapture: { time: new Date().toISOString(), result }
             });
             if (result.success) {
+                // Mark DEG report as sent if force22h was used (ensures once-per-day across all modes)
+                if (force22h) {
+                    await markDegReportSent();
+                    await chrome.alarms.clear('dom-capture-deg-fallback');
+                }
                 addCaptureLog('success', 'Capture thủ công thành công.');
             } else {
                 addCaptureLog('error', `Capture thủ công thất bại: ${result.error}`);
@@ -599,6 +831,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 });
 
                 if (result.success) {
+                    // Mark DEG report as sent if force22h was used (ensures once-per-day across all modes)
+                    if (force22h) {
+                        await markDegReportSent();
+                        await chrome.alarms.clear('dom-capture-deg-fallback');
+                    }
                     addCaptureLog('success', `Test thành công. Caption: ${result.serverResponse?.caption || ''}`);
                 } else {
                     addCaptureLog('error', `Test thất bại: ${result.error}`);
