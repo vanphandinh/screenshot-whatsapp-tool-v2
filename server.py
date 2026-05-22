@@ -412,6 +412,11 @@ def capture():
         log("Capturing full-screen screenshot...", "INFO")
         screenshot_path = take_fullscreen_screenshot()
 
+        if not screenshot_path:
+            msg = "Không thể chụp ảnh màn hình (chưa chọn cửa sổ hoặc lỗi). Huỷ gửi báo cáo."
+            log(msg, "ERROR")
+            return jsonify({"success": False, "error": msg}), 400
+
         # Extract values
         def get_val(name):
             info = data.get(name, {})
@@ -530,10 +535,9 @@ def capture():
                 if screenshot_path:
                     log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
                     whatsapp_client.sendImage(target_number, screenshot_path, caption=caption)
+                    log("Report sent successfully!", "SUCCESS")
                 else:
-                    log(f"Sending text to {target_number} ({msg_type_log})...", "ACTION")
-                    whatsapp_client.sendText(target_number, caption)
-                log("Report sent successfully!", "SUCCESS")
+                    log("Không có ảnh màn hình để gửi báo cáo.", "ERROR")
             except Exception as e:
                 log(f"WhatsApp sending error: {e}", "ERROR")
 
