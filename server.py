@@ -371,6 +371,22 @@ def status():
         "version": "1.0.0"
     })
 
+@app.route('/api/focus', methods=['GET'])
+def api_focus_target():
+    """Brings the user-selected target Chrome window to the foreground."""
+    try:
+        hwnd = find_chrome_window()
+        if hwnd:
+            focus_and_restore_window(hwnd)
+            log(f"API yêu cầu đưa cửa sổ target lên trước thành công: {target_window_title}", "SUCCESS")
+            return jsonify({"success": True, "title": target_window_title})
+        else:
+            log("API yêu cầu focus nhưng chưa chọn cửa sổ", "WARNING")
+            return jsonify({"success": False, "error": "Chưa chọn cửa sổ Chrome trên server"}), 400
+    except Exception as e:
+        log(f"Lỗi khi focus cửa sổ từ API: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/capture', methods=['POST'])
 def capture():
