@@ -18,6 +18,7 @@ config.json
 # --- IDEs ---
 .vscode/
 .idea/
+.codegraph
 
 # --- OS ---
 Thumbs.db

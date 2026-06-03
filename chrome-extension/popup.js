@@ -3,6 +3,18 @@
 // Manages UI interactions, config persistence, element picker, schedule display
 // =============================================================================
 
+// Các trường dữ liệu bắt buộc server yêu cầu (phải khớp với server.py và background.js)
+const REQUIRED_FIELDS = [
+    'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
+    'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
+    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12'
+];
+
+// ─── Helper: trả về danh sách các trường bắt buộc chưa được cấu hình selector ───
+function getEmptyRequiredSelectors(selectors) {
+    return REQUIRED_FIELDS.filter(f => !selectors[f] || !selectors[f].trim());
+}
+
 document.addEventListener('DOMContentLoaded', init);
 
 let config = {
@@ -47,8 +59,11 @@ const TEST_SCENARIOS = {
 
 // ─── Init ───
 async function init() {
-    // Load config from background
-    config = await sendMsg({ type: 'GET_CONFIG' }) || config;
+    // Load config from background — only use if valid (not an error object)
+    const remoteConfig = await sendMsg({ type: 'GET_CONFIG' });
+    if (remoteConfig && remoteConfig.targetUrl !== undefined) {
+        config = remoteConfig;
+    }
 
     // Populate UI
     renderSelectors();
@@ -200,13 +215,14 @@ function renderSelectors() {
     list.innerHTML = '';
 
     for (const [name, selector] of Object.entries(config.selectors)) {
+        const isRequired = REQUIRED_FIELDS.includes(name);
         const row = document.createElement('div');
         row.className = 'selector-row';
         row.innerHTML = `
-      <span class="selector-name">${escapeHtml(name)}</span>
+      <span class="selector-name${isRequired ? ' required-field' : ''}" title="${isRequired ? 'Trường bắt buộc (server yêu cầu)' : ''}">${escapeHtml(name)}${isRequired ? ' *' : ''}</span>
       <input type="text" class="selector-input" value="${escapeHtml(selector)}" placeholder="CSS selector..." data-field="${escapeHtml(name)}">
       <button class="btn-picker" title="Pick element trên trang" data-field="${escapeHtml(name)}">🎯</button>
-      <button class="btn-remove" title="Xóa" data-field="${escapeHtml(name)}">✕</button>
+      <button class="btn-remove" title="${isRequired ? 'Không thể xóa trường bắt buộc' : 'Xóa'}" data-field="${escapeHtml(name)}"${isRequired ? ' disabled style="opacity:0.3;cursor:not-allowed"' : ''}>✕</button>
     `;
         list.appendChild(row);
     }
@@ -230,6 +246,10 @@ function renderSelectors() {
     list.querySelectorAll('.btn-remove').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const field = e.target.dataset.field;
+            if (REQUIRED_FIELDS.includes(field)) {
+                addLog('warning', `Không thể xóa trường bắt buộc "${field}"`);
+                return;
+            }
             delete config.selectors[field];
             renderSelectors();
             saveConfigToBackground();
@@ -328,8 +348,14 @@ async function captureNow(mode = 'normal') {
             return;
         }
 
-        // Live mode: real DOM capture
+        // For live capture mode, validate that all required selectors are configured
         if (mode === 'live') {
+            const emptyReq = getEmptyRequiredSelectors(config.selectors);
+            if (emptyReq.length > 0) {
+                alert(`Chưa cấu hình CSS selector cho các trường bắt buộc:\n${emptyReq.join(', ')}\n\nVui lòng cấu hình đầy đủ trước khi chạy.`);
+                if (btn) btn.classList.remove('loading');
+                return;
+            }
             sendMsg({ type: 'CAPTURE_NOW', force22h: false });
         } else {
             const scenario = TEST_SCENARIOS[mode];
@@ -346,7 +372,13 @@ async function captureNow(mode = 'normal') {
                     mockData: mockData
                 });
             } else {
-                // Fallback: normal live capture
+                // Fallback: normal live capture — also validate
+                const emptyReq = getEmptyRequiredSelectors(config.selectors);
+                if (emptyReq.length > 0) {
+                    alert(`Chưa cấu hình CSS selector cho các trường bắt buộc:\n${emptyReq.join(', ')}\n\nVui lòng cấu hình đầy đủ trước khi chạy.`);
+                    if (btn) btn.classList.remove('loading');
+                    return;
+                }
                 sendMsg({ type: 'CAPTURE_NOW', force22h: false });
             }
         }
@@ -408,6 +440,15 @@ async function saveSettings() {
         const isOnline = await checkServerStatus();
         if (!isOnline) {
             alert('Không thể bật chế độ tự động vì server chưa chạy.');
+            document.getElementById('toggleAutoCapture').checked = false;
+            document.getElementById('autoCaptureLabel').textContent = 'Tắt';
+            return;
+        }
+
+        // Validate that all required selectors are configured
+        const emptyReq = getEmptyRequiredSelectors(config.selectors);
+        if (emptyReq.length > 0) {
+            alert(`Không thể bật chế độ tự động vì chưa cấu hình CSS selector cho các trường bắt buộc:\n${emptyReq.join(', ')}\n\nVui lòng cấu hình đầy đủ trước khi bật.`);
             document.getElementById('toggleAutoCapture').checked = false;
             document.getElementById('autoCaptureLabel').textContent = 'Tắt';
             return;

@@ -211,7 +211,7 @@
 
     for (const [name, selector] of Object.entries(selectors)) {
       if (!selector) {
-        results[name] = { value: '', error: 'No selector configured' };
+        results[name] = { value: '', found: false, error: 'No selector configured' };
         continue;
       }
 

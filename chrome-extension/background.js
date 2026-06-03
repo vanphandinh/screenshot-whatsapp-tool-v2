@@ -6,11 +6,18 @@
 //   - Auto-start on extension load
 // =============================================================================
 
+// Các trường dữ liệu server yêu cầu (phải khớp tên với server.py)
+const REQUIRED_FIELDS = [
+    'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
+    'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
+    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12'
+];
+
 const DEFAULT_CONFIG = {
     serverUrl: 'http://localhost:5001',
     targetUrl: '',
     intervalMinutes: 60,
-    selectors: {},
+    selectors: Object.fromEntries(REQUIRED_FIELDS.map(f => [f, ''])),
     autoCapture: false,  // Default OFF as requested
     retryMinutes: 5,
     scheduleMode: '15min', // '15min' = 0-15 phút, '30min' = 0-30 phút
@@ -132,10 +139,17 @@ function sendMessageWithTimeout(tabId, message, timeoutMs = 30000) {
 }
 
 // ─── Get config from storage ───
+// Luôn merge với DEFAULT_CONFIG để đảm bảo mọi trường selector bắt buộc đều có mặt
 async function getConfig() {
     return new Promise((resolve) => {
         chrome.storage.local.get('config', (result) => {
-            resolve(result.config || { ...DEFAULT_CONFIG });
+            if (result.config) {
+                // Merge selectors: giữ giá trị người dùng đã cấu hình, thêm các trường còn thiếu với giá trị rỗng
+                const mergedSelectors = { ...DEFAULT_CONFIG.selectors, ...result.config.selectors };
+                resolve({ ...DEFAULT_CONFIG, ...result.config, selectors: mergedSelectors });
+            } else {
+                resolve({ ...DEFAULT_CONFIG });
+            }
         });
     });
 }
@@ -518,6 +532,11 @@ async function ensureContentScript(tabId) {
     }
 }
 
+// ─── Validate that all required selectors are configured ───
+function getEmptyRequiredSelectors(selectors) {
+    return REQUIRED_FIELDS.filter(f => !selectors[f] || !selectors[f].trim());
+}
+
 // ─── Capture data from target tab ───
 async function captureData(force22h = false, isTest = false) {
     const config = await getConfig();
@@ -528,6 +547,13 @@ async function captureData(force22h = false, isTest = false) {
 
     if (!config.selectors || Object.keys(config.selectors).length === 0) {
         return { success: false, error: 'No selectors configured' };
+    }
+
+    // Validate that all required selectors are configured (non-empty)
+    const emptyRequired = getEmptyRequiredSelectors(config.selectors);
+    if (emptyRequired.length > 0) {
+        const errMsg = `Thiếu CSS selector cho các trường bắt buộc: ${emptyRequired.join(', ')}`;
+        return { success: false, error: errMsg, missingSelectors: emptyRequired };
     }
 
     try {
@@ -745,10 +771,29 @@ async function runScheduledJob() {
             lastRunTime: new Date().toISOString()
         });
     } else {
-        // Job failed — override the pre-scheduled alarm with a 5-minute retry
-        console.log(`[DOMCapture] ❌ Job failed: ${result.error}. Overriding schedule with 5-min retry.`);
-        await addCaptureLog('error', `Capture thất bại: ${result.error}. Retry trong 5 phút.`);
-        await scheduleNext(false, result.error);
+        // If selectors are missing, disable auto-capture (retry won't help)
+        if (result.missingSelectors && result.missingSelectors.length > 0) {
+            console.log(`[DOMCapture] ❌ Missing required selectors: ${result.missingSelectors.join(', ')}. Disabling auto-capture.`);
+            await addCaptureLog('error', `Thiếu CSS selector cho: ${result.missingSelectors.join(', ')}. Đã TẮT chế độ tự động.`);
+            await stopScheduler();
+            // Also persist autoCapture = false
+            const currentConfig = await getConfig();
+            currentConfig.autoCapture = false;
+            await saveConfig(currentConfig);
+        } else if (result.error && result.error.startsWith('Cannot connect to server:')) {
+            // Server unreachable — disable auto-capture (retry won't help if server is down)
+            console.log(`[DOMCapture] ❌ Server unreachable: ${result.error}. Disabling auto-capture.`);
+            await addCaptureLog('error', `Không thể kết nối server. Đã TẮT chế độ tự động.`);
+            await stopScheduler();
+            const currentConfig = await getConfig();
+            currentConfig.autoCapture = false;
+            await saveConfig(currentConfig);
+        } else {
+            // Job failed — override the pre-scheduled alarm with a 5-minute retry
+            console.log(`[DOMCapture] ❌ Job failed: ${result.error}. Overriding schedule with 5-min retry.`);
+            await addCaptureLog('error', `Capture thất bại: ${result.error}. Retry trong 5 phút.`);
+            await scheduleNext(false, result.error);
+        }
     }
 
     // After scheduling next run, check if we need a 23h DEG fallback
@@ -791,6 +836,20 @@ async function runDegFallbackJob() {
     } else {
         console.log(`[DOMCapture] ❌ DEG fallback at 23h failed: ${result.error}`);
         await addCaptureLog('error', `Báo cáo sản lượng đầu cực 23h thất bại: ${result.error}`);
+        // If the failure is due to missing selectors or server unreachable, disable auto-capture
+        if (result.missingSelectors && result.missingSelectors.length > 0) {
+            await addCaptureLog('error', `Thiếu CSS selector cho: ${result.missingSelectors.join(', ')}. Đã TẮT chế độ tự động.`);
+            await stopScheduler();
+            const currentConfig = await getConfig();
+            currentConfig.autoCapture = false;
+            await saveConfig(currentConfig);
+        } else if (result.error && result.error.startsWith('Cannot connect to server:')) {
+            await addCaptureLog('error', 'Không thể kết nối server. Đã TẮT chế độ tự động.');
+            await stopScheduler();
+            const currentConfig = await getConfig();
+            currentConfig.autoCapture = false;
+            await saveConfig(currentConfig);
+        }
     }
 }
 
@@ -1028,9 +1087,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ─── On install/update, auto-start scheduler ───
 chrome.runtime.onInstalled.addListener(async () => {
     const config = await getConfig();
-    if (!config.selectors) {
-        await saveConfig(DEFAULT_CONFIG);
-    }
+    // Luôn lưu lại config đã merge để đảm bảo storage có đầy đủ các trường selector bắt buộc
+    await saveConfig(config);
     // Auto-start scheduling if autoCapture is enabled
     if (config.autoCapture === true) {
         await startScheduler();

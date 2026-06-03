@@ -167,6 +167,10 @@ body {
     flex-shrink: 0;
 }
 
+.selector-name.required-field {
+    color: #FF8A65;
+}
+
 .selector-input {
     flex: 1;
     background: var(--bg-primary);

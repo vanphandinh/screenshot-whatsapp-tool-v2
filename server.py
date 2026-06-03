@@ -264,7 +264,7 @@ def init_whatsapp():
 def get_groups():
     """Fetch groups from WhatsApp and return a list of (name, id) tuples."""
     global whatsapp_client
-    if not whatsapp_client or whatsapp_creator.state != 'CONNECTED':
+    if not whatsapp_client or not whatsapp_creator or whatsapp_creator.state != 'CONNECTED':
         log("WhatsApp not connected.", "ERROR")
         return []
     
@@ -333,6 +333,7 @@ def take_fullscreen_screenshot():
     except Exception:
         pass
 
+    hwnd = None
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(SCREENSHOT_DIR, f"capture_{ts}.png")
 
@@ -343,7 +344,7 @@ def take_fullscreen_screenshot():
             focus_and_restore_window(hwnd)
             # 2. Use NativeWindowLock to trap focus and cursor during capture
             with NativeWindowLock(hwnd):
-                time.sleep(0.5) 
+                time.sleep(0.5)
                 log(f"Đang chụp màn hình (Native Lock active)...", "INFO")
                 img = pyautogui.screenshot()
         else:
@@ -354,7 +355,7 @@ def take_fullscreen_screenshot():
         log(f"Full-screen screenshot saved: {path}", "SUCCESS")
         return path
     except Exception as e:
-        if 'hwnd' in locals() and hwnd:
+        if hwnd:
             focus_and_restore_window(hwnd)
         log(f"Screenshot error: {e}", "ERROR")
         return None
@@ -507,6 +508,10 @@ def capture():
             low_wind = max(0, inactive_tb_count - f_num - m_num)
             if low_wind > 0 and safe_float(aws) >= 6:
                 active += low_wind
+            # Prevent negative active count from stale/mismatched data
+            if active < 0:
+                log(f"CẢNH BÁO: active tính ra âm (DC={dc_num}, inactive={inactive_tb_count}), gán về 0.", "WARNING")
+                active = 0
         except ValueError:
             log(f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}", "ERROR")
             return jsonify({"success": False, "error": f"Invalid DC, F, or M value: {dc}, {f_val}, {m_val}"}), 400
@@ -535,12 +540,16 @@ def capture():
             test_phone = config.get('test_phone_number', '').strip()
             if test_phone:
                 target_number = test_phone
+            else:
+                msg = "Không thể gửi test: test_phone_number chưa được cấu hình trong config.json."
+                log(msg, "ERROR")
+                return jsonify({"success": False, "error": msg}), 400
 
         # ★ Send WhatsApp in background thread so the HTTP response returns immediately.
         # The extension's service worker gets killed by Chrome if we block too long.
         def send_whatsapp_async():
             try:
-                if not whatsapp_client or whatsapp_creator.state != 'CONNECTED':
+                if not whatsapp_client or not whatsapp_creator or whatsapp_creator.state != 'CONNECTED':
                     log("WhatsApp client not connected or initialized.", "ERROR")
                     return
                 if not target_number:
@@ -806,44 +815,51 @@ group_window = GroupWindow()
 def on_quit(icon, item):
     """Exit the application when tray icon Quit is clicked."""
     log("Shutting down...", "INFO")
-    
+
+    # Event to signal when cleanup is done (success or fail)
+    cleanup_done = threading.Event()
+
     # Failsafe: Force exit after 10 seconds if shutdown hangs
     def force_exit_failsafe():
-        time.sleep(10)
-        log("Failsafe: Forcing exit.", "WARNING")
-        os._exit(0)
-    
+        if not cleanup_done.wait(timeout=10):
+            log("Failsafe: Forcing exit after 10s timeout.", "WARNING")
+            os._exit(0)
+
     threading.Thread(target=force_exit_failsafe, daemon=True).start()
 
     def library_cleanup():
-        # 1. Try to logout if connected and preference is enabled
-        config = load_config()
-        if config.get('logout_on_quit', True):
-            if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
-                log("Logging out of WhatsApp...", "ACTION")
+        try:
+            # 1. Try to logout if connected and preference is enabled
+            config = load_config()
+            if config.get('logout_on_quit', True):
+                if whatsapp_client and whatsapp_creator and whatsapp_creator.state == 'CONNECTED':
+                    log("Logging out of WhatsApp...", "ACTION")
+                    try:
+                        # Use a shorter timeout to prevent permanent hang
+                        whatsapp_client.logout(timeout=10)
+                    except Exception as e:
+                        log(f"Logout error (expected on shut down): {e}", "DEBUG")
+            else:
+                log("Skipping WhatsApp logout as per user preference.", "INFO")
+
+            # 2. Try to close via library
+            if whatsapp_creator:
+                log("Closing WhatsApp browser...", "ACTION")
                 try:
-                    # Use a shorter timeout to prevent permanent hang
-                    whatsapp_client.logout(timeout=10)
+                    # Create.sync_close doesn't take arguments, it uses its own internal timeouts
+                    whatsapp_creator.sync_close()
                 except Exception as e:
-                    log(f"Logout error (expected on shut down): {e}", "DEBUG")
-        else:
-            log("Skipping WhatsApp logout as per user preference.", "INFO")
-        
-        # 2. Try to close via library
-        if whatsapp_creator:
-            log("Closing WhatsApp browser...", "ACTION")
-            try:
-                # Create.sync_close doesn't take arguments, it uses its own internal timeouts
-                whatsapp_creator.sync_close()
-            except Exception as e:
-                log(f"Library sync_close error: {e}", "DEBUG")
+                    log(f"Library sync_close error: {e}", "DEBUG")
+        finally:
+            cleanup_done.set()  # Signal completion even if cleanup failed
 
     # Run library cleanup in a separate thread to avoid blocking the main quit thread
     cleanup_thread = threading.Thread(target=library_cleanup)
     cleanup_thread.start()
-    
-    # Give library a very short time to start closing
+
+    # Give library time to finish cleanup
     cleanup_thread.join(timeout=10)
+    cleanup_done.set()  # Ensure failsafe doesn't fire if cleanup finished in time
 
     # 3. Force kill any remaining browser processes for this session
     log("Scanning for orphaned browser processes...", "DEBUG")
@@ -907,7 +923,7 @@ def setup_tray():
 
         config = load_config()
         menu = pystray.Menu(
-            pystray.MenuItem(lambda item: f"Target: {target_window_title[:50]}...", lambda: None, enabled=False),
+            pystray.MenuItem(lambda item: f"Target: {target_window_title[:50]}{'...' if len(target_window_title) > 50 else ''}", lambda: None, enabled=False),
             pystray.MenuItem("Select Target Chrome Window", lambda icon, item: chrome_window_selector.show()),
             pystray.MenuItem("Show Group IDs", lambda icon, item: show_group_selector()),
             pystray.MenuItem("Show Logs", lambda icon, item: log_window.toggle()),
