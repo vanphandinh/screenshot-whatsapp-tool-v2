@@ -379,7 +379,7 @@ def api_focus_target():
         if hwnd:
             focus_and_restore_window(hwnd)
             log(f"API yêu cầu đưa cửa sổ target lên trước thành công: {target_window_title}", "SUCCESS")
-            return jsonify({"success": True, "title": target_window_title})
+            return jsonify({"success": True})
         else:
             log("API yêu cầu focus nhưng chưa chọn cửa sổ", "WARNING")
             return jsonify({"success": False, "error": "Chưa chọn cửa sổ Chrome trên server"}), 400

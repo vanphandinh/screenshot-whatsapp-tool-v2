@@ -434,9 +434,8 @@ async function getTargetTab(targetUrl, serverUrl) {
             const res = await fetch(`${serverUrl}/api/focus`, { method: 'GET', signal: AbortSignal.timeout(5000) });
             if (res.ok) {
                 const data = await res.json();
-                if (data.success && data.title) {
-                    const serverTitle = data.title;
-                    console.log(`[DOMCapture] Server focused target window successfully: "${serverTitle}". Wait 500ms...`);
+                if (data.success) {
+                    console.log('[DOMCapture] Server focused target window successfully. Wait 500ms...');
                     await new Promise(r => setTimeout(r, 500));
                     
                     // Get all Chrome windows with their tabs
@@ -454,29 +453,7 @@ async function getTargetTab(targetUrl, serverUrl) {
                             }
                         }
                     }
-                    
-                    // Phase B: Match by Title (Fuzzy matching active tab title with Server's target window title)
-                    // This is a reliable fallback in case the OS focus event hasn't fully propagated to Chrome yet.
-                    for (const win of windows) {
-                        const activeTab = win.tabs.find(t => t.active);
-                        if (activeTab && activeTab.title) {
-                            const tabTitle = activeTab.title.toLowerCase();
-                            const servTitle = serverTitle.toLowerCase();
-                            
-                            // Check if one contains the other (fuzzy check)
-                            if (servTitle.includes(tabTitle) || tabTitle.includes(servTitle)) {
-                                // Find the target tab in this window
-                                for (const tab of win.tabs) {
-                                    if (tab.url && tab.url.startsWith(targetUrl)) {
-                                        console.log('[DOMCapture] Found target tab in the server-focused window via Title Match!');
-                                        return tab;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Phase C: If the server-focused window has targetUrl but active tab changed
+                    // Phase B: If the server-focused window has targetUrl but active tab changed
                     const focusedTabs = await chrome.tabs.query({ lastFocusedWindow: true });
                     for (const tab of focusedTabs) {
                         if (tab.url && tab.url.startsWith(targetUrl)) {
