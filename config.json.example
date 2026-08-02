@@ -1,15 +1,8 @@
-{
-
-    "phone_number": "",
-
-    "test_phone_number": "",
-
-    "wpp_session": "default_session",
-
-    "max_retention_days": 3,
-
-    "logout_on_quit": true,
-
-    "api_token": ""
-
-}
+{
+    "phone_number": "",
+    "test_phone_number": "",
+    "wpp_session": "default_session",
+    "max_retention_days": 3,
+    "logout_on_quit": true,
+    "api_token": ""
+}
