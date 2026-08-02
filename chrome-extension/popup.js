@@ -18,13 +18,15 @@ function getEmptyRequiredSelectors(selectors) {
 document.addEventListener('DOMContentLoaded', init);
 
 let config = {
-    serverUrl: 'http://localhost:5001',
+    serverUrl: 'http://127.0.0.1:5001',
     targetUrl: '',
     selectors: {},
     autoCapture: false,
     scheduleMode: '15min',
-    intervalHours: 1
+    intervalHours: 1,
+    apiToken: ''
 };
+let configLoadFailed = false;
 
 const logs = [];
 
@@ -39,7 +41,8 @@ const TEST_SCENARIOS = {
     '22h': { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true },
     // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3, AWS<6 → hiện "gió thấp"
     low_wind: { DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
-    // Wind high AWS: 3 TB inactive, F=0, M=0 → low_wind=3, nhưng AWS>=6 → KHÔNG hiện "gió thấp"
+    // Wind high AWS: 3 TB ≤0, F=0, M=0 → low_wind=3 nhưng AWS≥6 → không hiện "gió thấp";
+    // các TB đó coi như đang reset tạm → vẫn cộng vào "đang hoạt động" (active=12)
     wind_high_aws: { DC: '12', AWS: '7.5', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
     // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0
     maintenance: { DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false },
@@ -61,16 +64,31 @@ const TEST_SCENARIOS = {
 async function init() {
     // Load config from background — only use if valid (not an error object)
     const remoteConfig = await sendMsg({ type: 'GET_CONFIG' });
-    if (remoteConfig && remoteConfig.targetUrl !== undefined) {
+    if (remoteConfig && remoteConfig.success === false) {
+        configLoadFailed = true;
+        console.error('[popup] GET_CONFIG failed:', remoteConfig.error);
+    } else if (remoteConfig && remoteConfig.targetUrl !== undefined) {
         config = remoteConfig;
+        configLoadFailed = false;
+    } else {
+        configLoadFailed = true;
     }
 
     // Populate UI
     renderSelectors();
     document.getElementById('inputTargetUrl').value = config.targetUrl || '';
-    document.getElementById('inputServerUrl').value = config.serverUrl || 'http://localhost:5001';
-    document.getElementById('toggleAutoCapture').checked = config.autoCapture !== false;
-    document.getElementById('autoCaptureLabel').textContent = config.autoCapture !== false ? 'Bật' : 'Tắt';
+    document.getElementById('inputServerUrl').value = config.serverUrl || 'http://127.0.0.1:5001';
+    const apiTokenInput = document.getElementById('inputApiToken');
+    if (apiTokenInput) apiTokenInput.value = config.apiToken || '';
+    document.getElementById('toggleAutoCapture').checked = config.autoCapture === true;
+    document.getElementById('autoCaptureLabel').textContent = config.autoCapture === true ? 'Bật' : 'Tắt';
+
+    if (configLoadFailed) {
+        const statusEl = document.getElementById('serverStatus');
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="status-dot offline"></span> Không tải được cấu hình — không lưu để tránh xóa selectors';
+        }
+    }
 
     // Load interval hours
     const intervalHours = config.intervalHours !== undefined ? config.intervalHours : 1;
@@ -257,11 +275,24 @@ function renderSelectors() {
     });
 }
 
+// ─── Resolve tab for picker/preview (prefer configured targetUrl) ───
+async function findTargetTab() {
+    if (config.targetUrl) {
+        const tabs = await chrome.tabs.query({});
+        const match = tabs.find(t => t.url && t.url.startsWith(config.targetUrl));
+        if (match) return match;
+        alert(`Không tìm thấy tab khớp Target URL:\n${config.targetUrl}\n\nMở trang dashboard rồi thử lại.`);
+        return null;
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+}
+
 // ─── Start Element Picker ───
 async function startPicker(fieldName) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await findTargetTab();
     if (!tab) {
-        addLog('error', 'Không tìm thấy tab đang mở');
+        addLog('error', 'Không tìm thấy tab mục tiêu cho picker');
         return;
     }
 
@@ -287,8 +318,11 @@ async function refreshPreview() {
     btn.classList.add('loading');
 
     try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab) throw new Error('No active tab');
+        const tab = await findTargetTab();
+        if (!tab) {
+            addLog('error', 'Không tìm thấy tab mục tiêu cho preview');
+            return;
+        }
 
         try {
             await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
@@ -341,14 +375,14 @@ async function captureNow(mode = 'normal') {
 
     try {
         // Check server status BEFORE sending message and closing popup
-        const isOnline = await checkServerStatus();
+        const isOnline = await checkServerStatus({ requireTestRecipient: true });
         if (!isOnline) {
-            alert('Không thể kết nối đến server. Vui lòng bật server và thử lại.');
+            alert('Không thể kết nối đến server / thiếu test_phone_number. Vui lòng kiểm tra và thử lại.');
             if (btn) btn.classList.remove('loading');
             return;
         }
 
-        // For live capture mode, validate that all required selectors are configured
+        // Real DOM scrape → test group (isTest); do not mark DEG / live recipient
         if (mode === 'live') {
             const emptyReq = getEmptyRequiredSelectors(config.selectors);
             if (emptyReq.length > 0) {
@@ -356,7 +390,7 @@ async function captureNow(mode = 'normal') {
                 if (btn) btn.classList.remove('loading');
                 return;
             }
-            sendMsg({ type: 'CAPTURE_NOW', force22h: false });
+            sendMsg({ type: 'CAPTURE_NOW', force22h: false, isTest: true });
         } else {
             const scenario = TEST_SCENARIOS[mode];
             if (scenario) {
@@ -372,14 +406,14 @@ async function captureNow(mode = 'normal') {
                     mockData: mockData
                 });
             } else {
-                // Fallback: normal live capture — also validate
+                // Fallback: real DOM scrape, still test recipient
                 const emptyReq = getEmptyRequiredSelectors(config.selectors);
                 if (emptyReq.length > 0) {
                     alert(`Chưa cấu hình CSS selector cho các trường bắt buộc:\n${emptyReq.join(', ')}\n\nVui lòng cấu hình đầy đủ trước khi chạy.`);
                     if (btn) btn.classList.remove('loading');
                     return;
                 }
-                sendMsg({ type: 'CAPTURE_NOW', force22h: false });
+                sendMsg({ type: 'CAPTURE_NOW', force22h: false, isTest: true });
             }
         }
 
@@ -432,14 +466,29 @@ async function refreshScheduleStatus() {
 
 // ─── Save Settings ───
 async function saveSettings() {
+    if (configLoadFailed) {
+        alert('Không thể lưu: cấu hình chưa tải được từ extension. Đóng popup và mở lại, rồi thử lại.');
+        return;
+    }
+
     const targetUrl = document.getElementById('inputTargetUrl').value.trim();
     const serverUrl = document.getElementById('inputServerUrl').value.trim();
+    const apiToken = (document.getElementById('inputApiToken')?.value || '').trim();
     const autoCapture = document.getElementById('toggleAutoCapture').checked;
+    const scheduleMode = document.querySelector('input[name="scheduleMode"]:checked')?.value || '15min';
+    const intervalHours = parseInt(document.querySelector('input[name="intervalHours"]:checked')?.value || '1');
 
     if (autoCapture) {
-        const isOnline = await checkServerStatus();
+        // interval=0 = lịch debug → nhóm test; còn lại → nhóm live
+        const isOnline = await checkServerStatus({
+            requireTestRecipient: intervalHours === 0,
+            apiToken,
+            serverUrl
+        });
         if (!isOnline) {
-            alert('Không thể bật chế độ tự động vì server chưa chạy.');
+            alert(intervalHours === 0
+                ? 'Không thể bật chế độ tự động (Debug): cần test_phone_number / server sẵn sàng.'
+                : 'Không thể bật chế độ tự động vì server chưa sẵn sàng (cần phone_number live).');
             document.getElementById('toggleAutoCapture').checked = false;
             document.getElementById('autoCaptureLabel').textContent = 'Tắt';
             return;
@@ -455,11 +504,9 @@ async function saveSettings() {
         }
     }
 
-    const scheduleMode = document.querySelector('input[name="scheduleMode"]:checked')?.value || '15min';
-    const intervalHours = parseInt(document.querySelector('input[name="intervalHours"]:checked')?.value || '1');
-
     config.targetUrl = targetUrl;
     config.serverUrl = serverUrl;
+    config.apiToken = apiToken;
     config.autoCapture = document.getElementById('toggleAutoCapture').checked;
     config.scheduleMode = scheduleMode;
     config.intervalHours = intervalHours;
@@ -480,22 +527,57 @@ async function saveSettings() {
 
 // ─── Save config to background ───
 async function saveConfigToBackground() {
+    if (configLoadFailed) {
+        console.warn('[popup] Refusing to save — config was not loaded successfully');
+        return;
+    }
     await sendMsg({ type: 'SAVE_CONFIG', config });
 }
 
 // ─── Check Server Status ───
-async function checkServerStatus() {
+// opts.requireTestRecipient: Test button / mock — chỉ cần test_phone
+// mặc định (auto-capture): cần phone_number live
+async function checkServerStatus(opts = {}) {
     const statusEl = document.getElementById('serverStatus');
     const serverUrlInput = document.getElementById('inputServerUrl');
-    const serverUrl = (serverUrlInput ? serverUrlInput.value : config.serverUrl).trim();
+    const serverUrl = (opts.serverUrl ?? (serverUrlInput ? serverUrlInput.value : config.serverUrl)).trim();
+    const apiToken = (opts.apiToken ?? config.apiToken ?? '').trim();
 
     if (statusEl) statusEl.innerHTML = '<span class="status-dot"></span> Đang kiểm tra...';
 
     try {
-        const res = await fetch(`${serverUrl}/api/status`, { method: 'GET', signal: AbortSignal.timeout(3000) });
+        const headers = {};
+        if (apiToken) headers['X-API-Token'] = apiToken;
+        const res = await fetch(`${serverUrl}/api/status`, {
+            method: 'GET',
+            headers,
+            signal: AbortSignal.timeout(3000)
+        });
         if (res.ok) {
-            if (statusEl) statusEl.innerHTML = '<span class="status-dot online"></span> Server đang chạy';
-            return true;
+            const data = await res.json();
+            const parts = [];
+            if (data.token_valid === false) parts.push('token sai/thiếu');
+            else if (data.token_valid) parts.push('token OK');
+            if (data.whatsapp_connected) parts.push('WA OK');
+            else parts.push('WA chưa kết nối');
+            if (data.whatsapp_send_busy) parts.push('đang gửi');
+            if (data.recipient_configured === false) parts.push('SĐT không hợp lệ');
+            else if (data.recipient_configured) parts.push('SĐT OK');
+            if (data.test_recipient_configured === false) parts.push('test SĐT thiếu');
+            else if (data.test_recipient_configured) parts.push('test SĐT OK');
+            if (data.target_window_selected === false) parts.push('chưa chọn cửa sổ');
+            const detail = parts.length ? ` (${parts.join(', ')})` : '';
+            const baseReady = data.token_valid && data.whatsapp_connected
+                && data.target_window_selected && !data.whatsapp_send_busy;
+            const ready = opts.requireTestRecipient
+                ? (baseReady && data.test_recipient_configured !== false)
+                : (baseReady && data.recipient_configured);
+            if (statusEl) {
+                statusEl.innerHTML = ready
+                    ? `<span class="status-dot online"></span> Server sẵn sàng${detail}`
+                    : `<span class="status-dot offline"></span> Server chạy nhưng chưa sẵn sàng${detail}`;
+            }
+            return ready;
         } else {
             if (statusEl) statusEl.innerHTML = '<span class="status-dot offline"></span> Server lỗi: ' + res.status;
             return false;

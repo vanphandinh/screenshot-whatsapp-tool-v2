@@ -6,6 +6,9 @@
 (function () {
   'use strict';
 
+  if (window.__domCaptureContentLoaded) return;
+  window.__domCaptureContentLoaded = true;
+
   let pickerActive = false;
   let pickerFieldName = null;
   let highlightEl = null;

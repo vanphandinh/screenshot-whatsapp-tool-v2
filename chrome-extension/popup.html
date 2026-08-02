@@ -76,7 +76,7 @@
             <div class="action-bar-test">
                 <select class="input-select" id="selectTestMode">
                     <optgroup label="── Dữ liệu thật ──">
-                        <option value="live">📡 Chạy ngay (dữ liệu thật)</option>
+                        <option value="live">📡 Chạy ngay (dữ liệu thật → nhóm test)</option>
                     </optgroup>
                     <optgroup label="── Cơ bản ──">
                         <option value="normal">🚀 Tất cả hoạt động</option>
@@ -84,7 +84,7 @@
                     </optgroup>
                     <optgroup label="── Một điều kiện ──">
                         <option value="low_wind">💨 Gió thấp (AWS&lt;6)</option>
-                        <option value="wind_high_aws">💨❌ TB nghỉ nhưng AWS≥6</option>
+                        <option value="wind_high_aws">💨 TB ≤0 + AWS≥6 (reset tạm → vẫn hoạt động)</option>
                         <option value="maintenance">🔧 Bảo trì</option>
                         <option value="error">⚠️ Lỗi</option>
                     </optgroup>
@@ -115,13 +115,19 @@
 
             <div class="form-group">
                 <label>🖥️ Server URL</label>
-                <input type="url" id="inputServerUrl" placeholder="http://localhost:5001" class="input"
-                    value="http://localhost:5001">
+                <input type="url" id="inputServerUrl" placeholder="http://127.0.0.1:5001" class="input"
+                    value="http://127.0.0.1:5001">
                 <div class="server-status" id="serverStatus">
                     <span class="status-dot offline"></span>
                     <span>Chưa kiểm tra</span>
                 </div>
                 <button class="btn btn-ghost btn-sm" id="btnCheckServer">Kiểm tra kết nối</button>
+            </div>
+
+            <div class="form-group">
+                <label>🔑 API Token</label>
+                <input type="text" id="inputApiToken" placeholder="api_token từ config.json / log server" class="input" autocomplete="off">
+                <small class="help-text">Phải khớp <code>api_token</code> trong config.json của server</small>
             </div>
 
             <div class="divider"></div>

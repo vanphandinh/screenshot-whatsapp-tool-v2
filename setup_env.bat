@@ -45,6 +45,15 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo [*] Installing Playwright Chromium browser...
+set "PLAYWRIGHT_BROWSERS_PATH=%~dp0playwright-browsers"
+playwright install chromium
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to install Playwright Chromium.
+    pause
+    exit /b 1
+)
+
 echo.
 echo ======================================================
 echo [+] Setup completed successfully!
