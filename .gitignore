@@ -2,25 +2,49 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+.venv/
 venv/
 .env
+.env.*
+!.env.example
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# --- Project Specific ---
-screenshots/*.png
-!screenshots/.gitkeep
+# --- Runtime / secrets (local) ---
+config.json
 tokens/
 playwright-browsers/
+screenshots/
 
-# --- Configuration (Sensitive) ---
-# Better to ignore and provide config.example.json
-config.json
+# --- Audit harness working dirs ---
+_workspace/
+_workspace_*/
 
-# --- IDEs ---
+# --- IDEs / tooling ---
 .vscode/
 .idea/
-.codegraph
+.codegraph/
+*.swp
+*.swo
+*~
 
 # --- OS ---
 Thumbs.db
+ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
 .DS_Store
+
+# --- Logs ---
+*.log
