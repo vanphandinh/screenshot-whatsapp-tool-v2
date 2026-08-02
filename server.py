@@ -706,7 +706,8 @@ def cleanup_old_screenshots(retention_days):
 
 def take_fullscreen_screenshot():
     """
-    Capture the selected Chrome window (multi-monitor aware via ImageGrab bbox).
+    Capture the full desktop (all monitors, including taskbar).
+    Still focuses/maximizes the selected Chrome window first so the target UI is visible.
     Returns (path, None) on success, (None, error_code) on failure.
     error_code: NO_TARGET_WINDOW | SCREENSHOT_FAILED
     """
@@ -729,16 +730,11 @@ def take_fullscreen_screenshot():
         focus_and_restore_window(hwnd)
         with NativeWindowLock(hwnd):
             time.sleep(0.5)
-            log("Đang chụp cửa sổ mục tiêu (Native Lock active)...", "INFO")
-            rect = ctypes.wintypes.RECT()
-            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                log("GetWindowRect failed — cannot capture window bbox", "ERROR")
-                return None, "SCREENSHOT_FAILED"
-            bbox = (rect.left, rect.top, rect.right, rect.bottom)
+            log("Đang chụp full desktop (Native Lock active)...", "INFO")
             try:
-                img = ImageGrab.grab(bbox=bbox, all_screens=True)
+                img = ImageGrab.grab(all_screens=True)
             except TypeError:
-                img = ImageGrab.grab(bbox=bbox)
+                img = ImageGrab.grab()
 
         img.save(path)
         log(f"Screenshot saved: {path}", "SUCCESS")
