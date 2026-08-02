@@ -10,7 +10,9 @@
 const REQUIRED_FIELDS = [
     'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
     'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
-    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12'
+    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12',
+    'TBS1', 'TBS2', 'TBS3', 'TBS4', 'TBS5', 'TBS6',
+    'TBS7', 'TBS8', 'TBS9', 'TBS10', 'TBS11', 'TBS12'
 ];
 
 const DEFAULT_CONFIG = {
@@ -991,6 +993,11 @@ function normalizeScrapedNumber(value, fieldName) {
         .replace(/\u2212/g, '-')  // Unicode minus
         .replace(/\u2013/g, '-')  // en-dash
         .replace(/\u2014/g, '-'); // em-dash
+    // TBS* = turbine status strings — keep text; collapse internal whitespace (incl. NBSP)
+    if (fieldName && /^TBS\d+$/.test(fieldName)) {
+        s = s.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        return s;
+    }
     // Dashboard placeholders → missing (validation fails) instead of inventing values
     if (/^(—|–|-|−|n\/?a|null|none|\.|…)$/i.test(s)) {
         return '';
@@ -1229,7 +1236,10 @@ async function runScheduledJob() {
         // If selectors are missing, disable auto-capture (retry won't help)
         if (result.missingSelectors && result.missingSelectors.length > 0) {
             console.log(`[DOMCapture] ❌ Missing required selectors: ${result.missingSelectors.join(', ')}. Disabling auto-capture.`);
-            await addCaptureLog('error', `Thiếu CSS selector cho: ${result.missingSelectors.join(', ')}. Đã TẮT chế độ tự động.`);
+            const tbsHint = result.missingSelectors.some(f => /^TBS\d+$/.test(f))
+                ? ' (sau cập nhật cần map thêm TBS1–TBS12 — trạng thái tua bin)'
+                : '';
+            await addCaptureLog('error', `Thiếu CSS selector cho: ${result.missingSelectors.join(', ')}. Đã TẮT chế độ tự động.${tbsHint}`);
             await stopScheduler();
             // Also persist autoCapture = false
             const currentConfig = await getConfig();

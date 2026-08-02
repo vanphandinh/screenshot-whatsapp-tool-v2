@@ -7,7 +7,9 @@
 const REQUIRED_FIELDS = [
     'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
     'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
-    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12'
+    'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12',
+    'TBS1', 'TBS2', 'TBS3', 'TBS4', 'TBS5', 'TBS6',
+    'TBS7', 'TBS8', 'TBS9', 'TBS10', 'TBS11', 'TBS12'
 ];
 
 // ─── Helper: trả về danh sách các trường bắt buộc chưa được cấu hình selector ───
@@ -32,32 +34,56 @@ const logs = [];
 
 // ─── Test Scenarios: mock data for each caption case ───
 // TB values: >0 = active, <=0 = inactive
-// low_wind = inactive_count - F - M
+// low_wind = inactive_count - F - m_eff
+// m_eff: if any TB ≤0 with TBS in {Service mode, HMI stop} → count those; else use scraped M
 // Điều kiện hiển thị "gió thấp": low_wind > 0 AND AWS < 6
+// Inactive TB without TBS-maint use "Warning Character Code" so scraped-M scenarios stay on M branch
+function withTbs(scenario, overrides = {}) {
+    const out = { ...scenario };
+    for (let i = 1; i <= 12; i++) {
+        const tbsKey = `TBS${i}`;
+        if (overrides[tbsKey] !== undefined) {
+            out[tbsKey] = overrides[tbsKey];
+            continue;
+        }
+        if (out[tbsKey] !== undefined) continue;
+        const tb = parseFloat(String(out[`TB${i}`] ?? '').replace(',', '.'));
+        out[tbsKey] = (Number.isFinite(tb) && tb > 0) ? 'Power Production' : 'Warning Character Code';
+    }
+    return out;
+}
+
 const TEST_SCENARIOS = {
     // All active, no issues
-    normal: { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false },
+    normal: withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false }),
     // All active + 22h report
-    '22h': { DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true },
+    '22h': withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true }),
     // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3, AWS<6 → hiện "gió thấp"
-    low_wind: { DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    low_wind: withTbs({ DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // Wind high AWS: 3 TB ≤0, F=0, M=0 → low_wind=3 nhưng AWS≥6 → không hiện "gió thấp";
     // các TB đó coi như đang reset tạm → vẫn cộng vào "đang hoạt động" (active=12)
-    wind_high_aws: { DC: '12', AWS: '7.5', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
-    // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0
-    maintenance: { DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false },
+    wind_high_aws: withTbs({ DC: '12', AWS: '7.5', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
+    // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0 (TBS không Service/HMI → dùng M)
+    maintenance: withTbs({ DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false }),
     // Error only: 1 TB inactive, F=1, M=0 → low_wind=0
-    error: { DC: '12', AWS: '5.3', TAP: '16.5', F: '1', M: '0', DEG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false },
+    error: withTbs({ DC: '12', AWS: '5.3', TAP: '16.5', F: '1', M: '0', DEG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false }),
     // Low wind + Maintenance: 5 inactive, M=2, F=0 → low_wind=3
-    wind_maint: { DC: '12', AWS: '2.1', TAP: '10.5', F: '0', M: '2', DEG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    wind_maint: withTbs({ DC: '12', AWS: '2.1', TAP: '10.5', F: '0', M: '2', DEG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // Low wind + Error: 4 inactive, F=1, M=0 → low_wind=3
-    wind_error: { DC: '12', AWS: '2.1', TAP: '12.0', F: '1', M: '0', DEG: '88.6', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    wind_error: withTbs({ DC: '12', AWS: '2.1', TAP: '12.0', F: '1', M: '0', DEG: '88.6', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // Maintenance + Error: 3 inactive, M=2, F=1 → low_wind=0
-    maint_error: { DC: '12', AWS: '5.3', TAP: '13.5', F: '1', M: '2', DEG: '100.7', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    maint_error: withTbs({ DC: '12', AWS: '5.3', TAP: '13.5', F: '1', M: '2', DEG: '100.7', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // All conditions, no 22h: 6 inactive, M=2, F=1 → low_wind=3
-    all_no22h: { DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false },
+    all_no22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // All conditions + 22h report
-    all_22h: { DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }
+    all_22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }),
+    // TBS-maint ưu tiên: M=5 lệch, chỉ TB11 Service mode + TB12 HMI stop → m_eff=2 (bỏ M)
+    maint_from_tbs: withTbs({
+        DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '5', DEG: '110.5',
+        TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4',
+        TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0',
+        force_22h: false
+    }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
 };
 
 // ─── Init ───

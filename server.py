@@ -921,6 +921,8 @@ def capture():
         deg = get_val("DEG")
         tb_names = [f"TB{i}" for i in range(1, 13)]
         tb_raw = [get_val(n) for n in tb_names]
+        tbs_names = [f"TBS{i}" for i in range(1, 13)]
+        tbs_raw = [get_val(n) for n in tbs_names]
         force_22h = bool(payload.get('force_22h', False))
 
         # DEG only required for 22h/DEG report; hourly runs must not fail on empty DEG
@@ -931,6 +933,9 @@ def capture():
         if force_22h and not deg:
             missing.append("DEG")
         for name, val in zip(tb_names, tb_raw):
+            if not val:
+                missing.append(name)
+        for name, val in zip(tbs_names, tbs_raw):
             if not val:
                 missing.append(name)
         if missing:
@@ -987,20 +992,46 @@ def capture():
                 log(msg, "ERROR")
                 return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "DEG"}), 400
 
-        # Reject inconsistent F/M vs inactive TB (do not silently drop fault/maintenance)
-        if f_num + m_num > inactive_tb_count:
+        # Maintenance: ưu tiên đếm TBS (TB≤0 + Service mode/HMI stop); không thì dùng scraped M
+        MAINT_TBS = frozenset({"service mode", "hmi stop"})
+
+        def _norm_tbs(s):
+            return " ".join(str(s).replace("\u00a0", " ").split()).casefold()
+
+        m_from_tbs = sum(
+            1 for tb, tbs in zip(tb_values, tbs_raw)
+            if tb <= 0 and _norm_tbs(tbs) in MAINT_TBS
+        )
+        if m_from_tbs > 0:
+            m_eff = m_from_tbs
+            m_eff_source = "tbs"
+        else:
+            m_eff = m_num
+            m_eff_source = "scraped"
+
+        # Consistency F + m_eff vs inactive (scraped M may be ignored when TBS-maint present)
+        if f_num + m_eff > inactive_tb_count:
             msg = (
-                f"F+M ({f_num}+{m_num}) exceeds inactive TB count ({inactive_tb_count})"
+                f"F+M ({f_num}+{m_eff}) exceeds inactive TB count ({inactive_tb_count})"
+                + (f" [m from {m_eff_source}, scraped M={m_num}]" if m_eff_source == "tbs" else "")
             )
             log(msg, "ERROR")
             return jsonify({
                 "success": False,
                 "error": msg,
                 "error_code": "INCONSISTENT_COUNTS",
-                "fields": {"F": f_num, "M": m_num, "inactive": inactive_tb_count}
+                "fields": {
+                    "F": f_num, "M": m_eff, "M_scraped": m_num,
+                    "M_source": m_eff_source, "inactive": inactive_tb_count
+                }
             }), 400
 
-        f_eff, m_eff = f_num, m_num
+        f_eff = f_num
+        if m_eff_source == "tbs" and m_num != m_eff:
+            log(
+                f"m_eff={m_eff} from TBS (ignored scraped M={m_num})",
+                "INFO"
+            )
         active = dc_num - inactive_tb_count
         low_wind = max(0, inactive_tb_count - f_eff - m_eff)
         # AWS >= 6: TB công suất ≤0 mà không thuộc F/M thường đang reset tạm → vẫn tính đang hoạt động
