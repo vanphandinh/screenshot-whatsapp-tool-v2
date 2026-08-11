@@ -24,11 +24,16 @@ const DEFAULT_CONFIG = {
     retryMinutes: 5,
     scheduleMode: '15min', // '15min' = 0-15 phút, '30min' = 0-30 phút
     intervalHours: 1,      // 1 = mỗi giờ, 2 = mỗi 2 giờ
-    apiToken: ''           // Must match server config.json api_token
+    apiToken: '',          // Must match server config.json api_token
+    manualIntervention: {
+        enabled: false,
+        turbines: {} // { "3": "maintenance", ... } only selected TBs
+    }
 };
 
 // Prevent overlapping capture jobs in this service-worker lifetime
 let captureInProgress = false;
+
 
 async function beginJobToken(opts = {}) {
     // Only reuse inflight id when explicitly recovering the same timed-out job (watchdog)
@@ -256,12 +261,48 @@ async function getConfig() {
             if (result.config) {
                 // Merge selectors: giữ giá trị người dùng đã cấu hình, thêm các trường còn thiếu với giá trị rỗng
                 const mergedSelectors = { ...DEFAULT_CONFIG.selectors, ...result.config.selectors };
-                resolve({ ...DEFAULT_CONFIG, ...result.config, selectors: mergedSelectors });
+                const miStored = result.config.manualIntervention || {};
+                const manualIntervention = {
+                    enabled: Boolean(miStored.enabled),
+                    turbines: (miStored.turbines && typeof miStored.turbines === 'object')
+                        ? { ...miStored.turbines }
+                        : {}
+                };
+                resolve({
+                    ...DEFAULT_CONFIG,
+                    ...result.config,
+                    selectors: mergedSelectors,
+                    manualIntervention
+                });
             } else {
-                resolve({ ...DEFAULT_CONFIG });
+                resolve({
+                    ...DEFAULT_CONFIG,
+                    selectors: { ...DEFAULT_CONFIG.selectors },
+                    manualIntervention: { enabled: false, turbines: {} }
+                });
             }
         });
     });
+}
+
+function buildManualInterventionPayload(config) {
+    const mi = config.manualIntervention || DEFAULT_CONFIG.manualIntervention;
+    const enabled = Boolean(mi.enabled);
+    const allowed = new Set(['normal', 'maintenance', 'error', 'low_wind']);
+    const turbines = {};
+    if (enabled && mi.turbines && typeof mi.turbines === 'object') {
+        for (const [k, v] of Object.entries(mi.turbines)) {
+            const key = String(k).trim();
+            const status = String(v).trim().toLowerCase();
+            if (!/^\d+$/.test(key)) continue;
+            const idx = parseInt(key, 10);
+            if (idx < 1 || idx > 12) continue;
+            if (!allowed.has(status)) continue;
+            turbines[String(idx)] = status;
+        }
+    }
+    // Match server: enabled with zero turbines → treat as off
+    return { enabled: enabled && Object.keys(turbines).length > 0, turbines };
 }
 
 // ─── Save config ───
@@ -928,7 +969,8 @@ async function captureData(force22h = false, isTest = false) {
                 data: normalizedData,
                 force_22h: force22hEffective,
                 is_test: isTest,
-                capture_id: jobToken
+                capture_id: jobToken,
+                manual_intervention: buildManualInterventionPayload(config)
             };
 
             const sendResult = await sendToServer(config.serverUrl, payload);
@@ -1623,7 +1665,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     data: mockData,
                     force_22h: force22h,
                     is_test: true,
-                    capture_id: jobToken
+                    capture_id: jobToken,
+                    manual_intervention: { enabled: false, turbines: {} }
                 };
 
                 const result = await sendToServer(config.serverUrl, payload);
@@ -1681,6 +1724,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     await stopScheduler();
                 }
             }
+            sendResponse({ ok: true });
+        })();
+        return true;
+    }
+
+    if (msg.type === 'SAVE_MANUAL_INTERVENTION') {
+        // Patch-only: never clobber autoCapture / selectors with a stale popup snapshot
+        (async () => {
+            const cfg = await getConfig();
+            const incoming = msg.manualIntervention || {};
+            const turbines = {};
+            if (incoming.turbines && typeof incoming.turbines === 'object') {
+                for (const [k, v] of Object.entries(incoming.turbines)) {
+                    turbines[String(k)] = String(v);
+                }
+            }
+            cfg.manualIntervention = {
+                enabled: Boolean(incoming.enabled),
+                turbines
+            };
+            await saveConfig(cfg);
             sendResponse({ ok: true });
         })();
         return true;

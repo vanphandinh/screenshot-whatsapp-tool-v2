@@ -51,6 +51,8 @@ body {
     padding: 14px 18px;
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     border-bottom: 1px solid var(--border);
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .logo {
@@ -585,6 +587,69 @@ body {
 .switch input:checked+.slider {
     background: var(--accent);
     border-color: var(--accent);
+}
+
+.mi-badge {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255, 167, 38, 0.2);
+    color: var(--warning);
+    font-weight: 600;
+}
+
+.mi-header-badge {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: rgba(255, 167, 38, 0.25);
+    color: var(--warning);
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
+
+.mi-turbine-panel {
+    margin-top: 10px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.mi-turbine-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mi-turbine-row {
+    display: grid;
+    grid-template-columns: 52px 18px 1fr;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.mi-turbine-row label.mi-tb-name {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.mi-turbine-row select {
+    width: 100%;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    font-size: 12px;
+}
+
+.mi-turbine-row select:disabled {
+    opacity: 0.45;
 }
 
 .switch input:checked+.slider::before {

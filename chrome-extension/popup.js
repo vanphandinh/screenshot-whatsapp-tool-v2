@@ -26,9 +26,17 @@ let config = {
     autoCapture: false,
     scheduleMode: '15min',
     intervalHours: 1,
-    apiToken: ''
+    apiToken: '',
+    manualIntervention: { enabled: false, turbines: {} }
 };
 let configLoadFailed = false;
+
+const MI_STATUS_OPTIONS = [
+    { value: 'normal', label: 'Bình thường' },
+    { value: 'maintenance', label: 'Bảo trì' },
+    { value: 'error', label: 'Lỗi' },
+    { value: 'low_wind', label: 'Gió thấp' }
+];
 
 const logs = [];
 
@@ -108,6 +116,11 @@ async function init() {
     if (apiTokenInput) apiTokenInput.value = config.apiToken || '';
     document.getElementById('toggleAutoCapture').checked = config.autoCapture === true;
     document.getElementById('autoCaptureLabel').textContent = config.autoCapture === true ? 'Bật' : 'Tắt';
+
+    if (!config.manualIntervention || typeof config.manualIntervention !== 'object') {
+        config.manualIntervention = { enabled: false, turbines: {} };
+    }
+    renderManualInterventionUI();
 
     if (configLoadFailed) {
         const statusEl = document.getElementById('serverStatus');
@@ -199,6 +212,14 @@ function bindEvents() {
     // Auto-capture toggle
     document.getElementById('toggleAutoCapture').addEventListener('change', (e) => {
         document.getElementById('autoCaptureLabel').textContent = e.target.checked ? 'Bật' : 'Tắt';
+    });
+
+    // Manual intervention toggle
+    document.getElementById('toggleManualIntervention').addEventListener('change', (e) => {
+        const enabled = e.target.checked;
+        document.getElementById('manualInterventionLabel').textContent = enabled ? 'Bật' : 'Tắt';
+        document.getElementById('miTurbinePanel').hidden = !enabled;
+        persistManualIntervention();
     });
 
     // Interval hours radio buttons
@@ -536,6 +557,7 @@ async function saveSettings() {
     config.autoCapture = document.getElementById('toggleAutoCapture').checked;
     config.scheduleMode = scheduleMode;
     config.intervalHours = intervalHours;
+    syncManualInterventionFromUI();
 
     await saveConfigToBackground();
     addLog('success', 'Cài đặt đã được lưu');
@@ -558,6 +580,17 @@ async function saveConfigToBackground() {
         return;
     }
     await sendMsg({ type: 'SAVE_CONFIG', config });
+}
+
+/** Persist only MI — avoids re-writing stale autoCapture/selectors (EXT-001). */
+async function persistManualIntervention() {
+    if (configLoadFailed) return;
+    syncManualInterventionFromUI();
+    updateMiBadge();
+    await sendMsg({
+        type: 'SAVE_MANUAL_INTERVENTION',
+        manualIntervention: config.manualIntervention
+    });
 }
 
 // ─── Check Server Status ───
@@ -611,6 +644,113 @@ async function checkServerStatus(opts = {}) {
     } catch {
         if (statusEl) statusEl.innerHTML = '<span class="status-dot offline"></span> Không thể kết nối';
         return false;
+    }
+}
+
+// ─── Manual intervention UI ───
+function renderManualInterventionUI() {
+    const mi = config.manualIntervention || { enabled: false, turbines: {} };
+    // Drop unknown statuses so UI and payload stay aligned (avoid endless 400)
+    const cleanTurbines = {};
+    const allowed = new Set(MI_STATUS_OPTIONS.map(o => o.value));
+    for (const [k, v] of Object.entries(mi.turbines || {})) {
+        const key = String(k);
+        const status = String(v).toLowerCase();
+        if (allowed.has(status) && /^\d+$/.test(key)) {
+            const idx = parseInt(key, 10);
+            if (idx >= 1 && idx <= 12) cleanTurbines[String(idx)] = status;
+        }
+    }
+    mi.turbines = cleanTurbines;
+    config.manualIntervention = mi;
+
+    const enabled = Boolean(mi.enabled);
+    const toggle = document.getElementById('toggleManualIntervention');
+    const label = document.getElementById('manualInterventionLabel');
+    const panel = document.getElementById('miTurbinePanel');
+    const grid = document.getElementById('miTurbineGrid');
+    if (!toggle || !grid) return;
+
+    toggle.checked = enabled;
+    if (label) label.textContent = enabled ? 'Bật' : 'Tắt';
+    if (panel) panel.hidden = !enabled;
+
+    grid.innerHTML = '';
+    for (let i = 1; i <= 12; i++) {
+        const key = String(i);
+        const selected = Object.prototype.hasOwnProperty.call(mi.turbines || {}, key);
+        const status = selected ? (mi.turbines[key] || 'normal') : 'normal';
+        const row = document.createElement('div');
+        row.className = 'mi-turbine-row';
+        row.dataset.tb = key;
+
+        const name = document.createElement('label');
+        name.className = 'mi-tb-name';
+        name.textContent = `TB${i}`;
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'mi-tb-check';
+        cb.checked = selected;
+        cb.addEventListener('change', () => {
+            const sel = row.querySelector('select');
+            if (sel) sel.disabled = !cb.checked;
+            persistManualIntervention();
+        });
+
+        const sel = document.createElement('select');
+        sel.className = 'mi-tb-status';
+        sel.disabled = !selected;
+        for (const opt of MI_STATUS_OPTIONS) {
+            const o = document.createElement('option');
+            o.value = opt.value;
+            o.textContent = opt.label;
+            if (opt.value === status) o.selected = true;
+            sel.appendChild(o);
+        }
+        sel.addEventListener('change', () => {
+            persistManualIntervention();
+        });
+
+        row.appendChild(name);
+        row.appendChild(cb);
+        row.appendChild(sel);
+        grid.appendChild(row);
+    }
+    updateMiBadge();
+}
+
+function syncManualInterventionFromUI() {
+    const enabled = Boolean(document.getElementById('toggleManualIntervention')?.checked);
+    const turbines = {};
+    document.querySelectorAll('#miTurbineGrid .mi-turbine-row').forEach((row) => {
+        const tb = row.dataset.tb;
+        const checked = row.querySelector('.mi-tb-check')?.checked;
+        const status = row.querySelector('.mi-tb-status')?.value || 'normal';
+        if (checked && tb) turbines[tb] = status;
+    });
+    config.manualIntervention = { enabled, turbines };
+}
+
+function updateMiBadge() {
+    const badge = document.getElementById('miBadge');
+    const headerBadge = document.getElementById('miHeaderBadge');
+    const mi = config.manualIntervention || {};
+    const n = Object.keys(mi.turbines || {}).length;
+    const active = Boolean(mi.enabled) && n > 0;
+    if (badge) {
+        if (mi.enabled) {
+            badge.hidden = false;
+            badge.textContent = n > 0
+                ? `Can thiệp: ${n} TB`
+                : 'Can thiệp: chọn ≥1 TB';
+        } else {
+            badge.hidden = true;
+        }
+    }
+    if (headerBadge) {
+        headerBadge.hidden = !active;
+        if (active) headerBadge.textContent = `Can thiệp: ${n}`;
     }
 }
 

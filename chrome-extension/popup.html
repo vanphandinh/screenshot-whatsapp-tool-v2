@@ -19,6 +19,7 @@
                 <span class="status-dot"></span>
                 <span class="status-text">Offline</span>
             </div>
+            <span class="mi-header-badge" id="miHeaderBadge" hidden>Can thiệp</span>
         </header>
 
         <!-- Tabs -->
@@ -143,6 +144,22 @@
                     <span id="autoCaptureLabel">Tắt</span>
                 </div>
                 <small class="help-text" id="autoCaptureHelp">Chạy mỗi giờ tại phút ngẫu nhiên. Retry sau 5 phút nếu thất bại.</small>
+            </div>
+
+            <div class="form-group">
+                <label>🛠️ Can thiệp thủ công</label>
+                <div class="toggle-row">
+                    <label class="switch">
+                        <input type="checkbox" id="toggleManualIntervention">
+                        <span class="slider"></span>
+                    </label>
+                    <span id="manualInterventionLabel">Tắt</span>
+                    <span class="mi-badge" id="miBadge" hidden>Can thiệp: 0 TB</span>
+                </div>
+                <small class="help-text">Caption bỏ qua dữ liệu thật của TB đã chọn; ảnh screenshot vẫn là dashboard.</small>
+                <div id="miTurbinePanel" class="mi-turbine-panel" hidden>
+                    <div class="mi-turbine-grid" id="miTurbineGrid"></div>
+                </div>
             </div>
 
             <div class="form-group" id="intervalHoursGroup">

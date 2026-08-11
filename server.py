@@ -26,6 +26,11 @@ from tkinter import scrolledtext
 from queue import Queue
 import psutil
 import pyperclip
+from caption_math import (
+    CaptionMathError,
+    compute_caption_counts,
+    parse_manual_intervention,
+)
 
 # WhatsApp send must finish before the extension's fetch abort (200s)
 WHATSAPP_SEND_TIMEOUT_SEC = 150
@@ -363,6 +368,7 @@ def parse_deg_force22h(raw):
     if re.match(r'^\d{1,3}\.\d{3}$', s):
         return float(s.replace('.', ''))
     return parse_number(raw)
+
 
 def validate_recipient(number):
     """Accept WhatsApp group/user ids or E.164-ish digits."""
@@ -921,6 +927,17 @@ def capture():
         tbs_raw = [get_val(n) for n in tbs_names]
         force_22h = bool(payload.get('force_22h', False))
 
+        try:
+            mi_enabled, mi_turbines = parse_manual_intervention(payload.get('manual_intervention'))
+        except CaptionMathError as e:
+            log(e.message, "ERROR")
+            return jsonify({
+                "success": False,
+                "error": e.message,
+                "error_code": e.error_code,
+                "fields": e.fields,
+            }), 400
+
         # DEG only required for 22h/DEG report; hourly runs must not fail on empty DEG
         missing = []
         for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap), ("F", f_val), ("M", m_val)]:
@@ -941,7 +958,6 @@ def capture():
 
         try:
             tb_values = [parse_number(tb) for tb in tb_raw]
-            inactive_tb_count = sum(1 for tb in tb_values if tb <= 0)
         except ValueError:
             msg = f"Invalid TB value: {', '.join(tb_raw)}"
             log(msg, "ERROR")
@@ -988,55 +1004,42 @@ def capture():
                 log(msg, "ERROR")
                 return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "DEG"}), 400
 
-        # Maintenance: ưu tiên đếm TBS (TB≤0 + Service mode/HMI stop); không thì dùng scraped M
-        MAINT_TBS = frozenset({"service mode", "hmi stop"})
-
-        def _norm_tbs(s):
-            return " ".join(str(s).replace("\u00a0", " ").split()).casefold()
-
-        m_from_tbs = sum(
-            1 for tb, tbs in zip(tb_values, tbs_raw)
-            if tb <= 0 and _norm_tbs(tbs) in MAINT_TBS
-        )
-        if m_from_tbs > 0:
-            m_eff = m_from_tbs
-            m_eff_source = "tbs"
-        else:
-            m_eff = m_num
-            m_eff_source = "scraped"
-
-        # Consistency F + m_eff vs inactive (scraped M may be ignored when TBS-maint present)
-        if f_num + m_eff > inactive_tb_count:
-            msg = (
-                f"F+M ({f_num}+{m_eff}) exceeds inactive TB count ({inactive_tb_count})"
-                + (f" [m from {m_eff_source}, scraped M={m_num}]" if m_eff_source == "tbs" else "")
+        try:
+            counts = compute_caption_counts(
+                tb_values, tbs_raw, f_num, m_num, dc_num, aws_num,
+                mi_enabled=mi_enabled, turbines=mi_turbines,
             )
-            log(msg, "ERROR")
-            return jsonify({
-                "success": False,
-                "error": msg,
-                "error_code": "INCONSISTENT_COUNTS",
-                "fields": {
-                    "F": f_num, "M": m_eff, "M_scraped": m_num,
-                    "M_source": m_eff_source, "inactive": inactive_tb_count
-                }
-            }), 400
+        except CaptionMathError as e:
+            log(e.message, "ERROR")
+            body = {"success": False, "error": e.message, "error_code": e.error_code}
+            if e.fields is not None:
+                body["fields"] = e.fields
+            return jsonify(body), 400
 
-        f_eff = f_num
-        if m_eff_source == "tbs" and m_num != m_eff:
+        m_eff = counts["m_eff"]
+        f_eff = counts["f_eff"]
+        active = counts["active"]
+        low_wind = counts["low_wind"]
+        m_eff_source = counts["m_eff_source"]
+
+        if mi_enabled:
+            log(
+                f"Manual intervention ON turbines={mi_turbines} "
+                f"phase1={counts.get('phase1')} phase2={counts.get('phase2')} "
+                f"clamped={counts.get('clamped')}",
+                "INFO",
+            )
+        if counts.get("clamped") and counts.get("phase1"):
+            log(
+                f"Phase1 F/M clamped to subset inactive "
+                f"(scraped F={f_num}, M={m_num}) → f={counts['phase1']['f']}, m={counts['phase1']['m']}",
+                "WARNING",
+            )
+        if (not mi_enabled) and m_eff_source == "tbs" and m_num != m_eff:
             log(
                 f"m_eff={m_eff} from TBS (ignored scraped M={m_num})",
-                "INFO"
+                "INFO",
             )
-        active = dc_num - inactive_tb_count
-        low_wind = max(0, inactive_tb_count - f_eff - m_eff)
-        # AWS >= 6: TB công suất ≤0 mà không thuộc F/M thường đang reset tạm → vẫn tính đang hoạt động
-        if low_wind > 0 and aws_num >= 6:
-            active += low_wind
-        if active < 0:
-            msg = f"Inconsistent counts: active={active} (DC={dc_num}, inactive={inactive_tb_count})"
-            log(msg, "ERROR")
-            return jsonify({"success": False, "error": msg, "error_code": "INCONSISTENT_COUNTS"}), 400
 
         # Fail fast BEFORE screenshot — avoids desktop hijack when WA is down or a prior send is wedged
         if not whatsapp_client or not whatsapp_creator or whatsapp_creator.state != 'CONNECTED':
@@ -1067,9 +1070,14 @@ def capture():
 
             aws_display = f"{aws_num:.1f}".rstrip('0').rstrip('.')
             tap_display = f"{tap_num:.1f}".rstrip('0').rstrip('.')
+            # MI: low_wind already excludes folded scrape portion; always show if > 0
+            # (override gió thấp must appear even when AWS >= 6). Legacy: hide when AWS >= 6.
+            show_low_wind = (
+                (low_wind > 0) if mi_enabled else (low_wind > 0 and aws_num < 6)
+            )
             caption = (
                 f"BC BLĐ: Hiện tại {active} TB đang hoạt động, " +
-                (f"{low_wind} TB dừng do tốc độ gió thấp, " if low_wind > 0 and aws_num < 6 else "") +
+                (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "") +
                 (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "") +
                 (f"{f_eff} TB dừng do bị lỗi, " if f_eff > 0 else "") +
                 f"tốc độ gió {aws_display} m/s, "

@@ -4,4 +4,5 @@ Pillow
 WPP_Whatsapp==1.0.2
 pyperclip
 psutil
+pytest
 
