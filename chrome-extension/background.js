@@ -784,7 +784,7 @@ async function checkServerReady(serverUrl, opts = {}) {
 }
 
 // ─── Capture data from target tab ───
-async function captureData(force22h = false, isTest = false) {
+async function captureData(force22h = false, isTest = false, opts = {}) {
     if (captureInProgress) {
         return { success: false, error: 'Capture already in progress', errorKind: 'busy' };
     }
@@ -792,7 +792,10 @@ async function captureData(force22h = false, isTest = false) {
     let jobToken = null;
     try {
     captureInProgress = true;
-    jobToken = await beginJobToken();
+    // Automatic recovery runs may reuse the inflight capture_id so the server can dedupe
+    // a job whose previous POST already reached the server (e.g. SW killed after WA was
+    // sent but before the 200 came back). Manual runs always mint a fresh id (EXT-001).
+    jobToken = await beginJobToken({ reuse: opts.reuse === true });
 
     const config = await getConfig();
 
@@ -1115,13 +1118,17 @@ async function sendToServer(serverUrl, payload) {
                 };
             }
             if (res.status === 504 || errorCode === 'SEND_TIMEOUT') {
+                // Server timed out waiting for the send — ask it what actually happened
+                // (BND-001) before the caller decides whether to retry.
+                const outcome = await getLastSendOutcome(payload && payload.capture_id);
                 return {
                     success: false,
                     error: errMsg || 'WhatsApp send timed out',
                     errorKind: 'timeout',
                     errorCode: 'SEND_TIMEOUT',
                     status: res.status,
-                    serverResponse: parsed
+                    serverResponse: parsed,
+                    lastSendOutcome: outcome
                 };
             }
             if (res.status === 409 || errorCode === 'SEND_BUSY') {
@@ -1177,10 +1184,15 @@ async function sendToServer(serverUrl, payload) {
         const msg = err && err.message ? err.message : String(err);
         // AbortSignal.timeout → TimeoutError/AbortError — server may still complete send
         if (name === 'TimeoutError' || name === 'AbortError' || /aborted|timeout/i.test(msg)) {
+            // Ask the server what actually happened to this capture before deciding
+            // whether to retry (BND-001): confirmed "failed" → safe to retry;
+            // confirmed "success" → do NOT retry (avoids duplicate); unresolved → unknown.
+            const outcome = await getLastSendOutcome(payload && payload.capture_id);
             return {
                 success: false,
                 error: `Request timed out: ${msg}`,
-                errorKind: 'timeout'
+                errorKind: 'timeout',
+                lastSendOutcome: outcome
             };
         }
         // Genuine unreachable (server down, connection refused)
@@ -1190,6 +1202,41 @@ async function sendToServer(serverUrl, payload) {
             errorKind: 'network'
         };
     }
+}
+
+// ─── Query the server for the outcome of a (possibly timed-out) WhatsApp send ───
+// Returns the last_send_outcome object only when it belongs to captureId (so a stale
+// outcome from an earlier job can never be mistaken for this one). When the server is
+// still resolving the send (whatsapp_send_busy), polls briefly before giving up.
+async function getLastSendOutcome(captureId, attempts = 3, intervalMs = 5000) {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            const config = await getConfig();
+            const headers = {};
+            if (config.apiToken) headers['X-API-Token'] = config.apiToken;
+            const res = await fetch(`${config.serverUrl}/api/status`, {
+                method: 'GET',
+                headers,
+                signal: AbortSignal.timeout(5000)
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            if (!data || data.last_send_outcome == null) return null;
+            if (data.whatsapp_send_busy) {
+                // Send still resolving — outcome currently reported belongs to an older
+                // job. Wait a moment and retry before concluding "unknown".
+            } else {
+                const outcome = data.last_send_outcome;
+                if (!captureId || outcome.capture_id === captureId) return outcome;
+                // Latest resolved outcome is from a different job — cannot use it.
+                return null;
+            }
+        } catch (_) {
+            return null;
+        }
+        if (i < attempts - 1) await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return null;
 }
 
 // ─── Add log entry to storage ───
@@ -1241,7 +1288,7 @@ async function runScheduledJob() {
     if (isNaN(intervalHours)) intervalHours = 1;
     const isTestMode = (intervalHours === 0);
 
-    const result = await captureData(force22h, isTestMode);
+    const result = await captureData(force22h, isTestMode, { reuse: true });
     console.log('[DOMCapture] captureData returned:', JSON.stringify({ success: result.success, error: result.error }));
 
     // Store last capture result
@@ -1305,19 +1352,45 @@ async function runScheduledJob() {
                 await scheduleNext(false, result.error);
             }
         } else if (result.errorKind === 'timeout') {
-            // SEND_TIMEOUT / client abort: WA may already be sending — do NOT 5-min retry (avoids duplicates)
-            console.log(`[DOMCapture] ⚠️ Timeout / SEND_TIMEOUT: ${result.error}. Keeping pre-scheduled next run.`);
-            await addCaptureLog('error', `Timeout gửi WA (có thể đã/đang gửi). Không retry 5 phút để tránh trùng.`);
-            if (force22h && !isTestMode) {
-                await markDegReportSent();
-                await chrome.alarms.clear('dom-capture-deg-fallback');
+            const outcome = result.lastSendOutcome;
+            if (outcome && outcome.status === 'failed') {
+                // Server confirmed the send FAILED — report did NOT go out → safe to retry.
+                console.log(`[DOMCapture] ⚠️ Timeout but server confirmed send FAILED (${outcome.detail}). Retrying.`);
+                await addCaptureLog('error', `Timeout nhưng server xác nhận gửi THẤT BẠI. Retry trong 5 phút.`);
+                await scheduleNext(false, 'Send failed after timeout (server-confirmed)');
+                // Skip scheduleDegFallbackIfNeeded below: the 5-min retry re-attempts with
+                // the correct force_22h flag (hour is still 22/23), so a separate 23h
+                // fallback alarm would only double-schedule the same report.
+                return;
+            } else if (outcome && outcome.status === 'success') {
+                // Server confirmed the send SUCCEEDED — do NOT retry (avoids duplicates).
+                console.log('[DOMCapture] Timeout but server confirmed send SUCCEEDED. No retry.');
+                await addCaptureLog('error', 'Timeout nhưng server xác nhận đã gửi thành công. Không retry để tránh trùng.');
+                if (force22h && !isTestMode) {
+                    await markDegReportSent();
+                    await chrome.alarms.clear('dom-capture-deg-fallback');
+                }
+                await saveScheduleState({
+                    ...preScheduledState,
+                    status: 'success',
+                    lastResult: 'Timeout (sent, server-confirmed)',
+                    lastRunTime: new Date().toISOString()
+                });
+            } else {
+                // Unresolved — WA may already be sending. Do NOT 5-min retry (avoids duplicates).
+                console.log(`[DOMCapture] ⚠️ Timeout / SEND_TIMEOUT: ${result.error}. Keeping pre-scheduled next run.`);
+                await addCaptureLog('error', `Timeout gửi WA (có thể đã/đang gửi). Không retry 5 phút để tránh trùng.`);
+                if (force22h && !isTestMode) {
+                    await markDegReportSent();
+                    await chrome.alarms.clear('dom-capture-deg-fallback');
+                }
+                await saveScheduleState({
+                    ...preScheduledState,
+                    status: 'success',
+                    lastResult: 'Timeout (may have sent)',
+                    lastRunTime: new Date().toISOString()
+                });
             }
-            await saveScheduleState({
-                ...preScheduledState,
-                status: 'success',
-                lastResult: 'Timeout (may have sent)',
-                lastRunTime: new Date().toISOString()
-            });
         } else if (result.errorKind === 'busy') {
             // Prior send still running — back off without hijacking; keep auto-capture
             console.log(`[DOMCapture] ⚠️ SEND_BUSY: ${result.error}. Retry in 15 min.`);
@@ -1400,7 +1473,7 @@ async function runDegFallbackJob() {
     const isTestMode = (intervalHours === 0);
 
     // Run capture with force22h = true (test mode when intervalHours === 0)
-    const result = await captureData(true, isTestMode);
+    const result = await captureData(true, isTestMode, { reuse: true });
 
     chrome.storage.local.set({
         lastCapture: {
@@ -1416,11 +1489,23 @@ async function runDegFallbackJob() {
         console.log('[DOMCapture] ✅ DEG fallback at 23h succeeded!');
         await addCaptureLog('success', `Báo cáo sản lượng đầu cực 23h thành công. ${result.serverResponse?.caption || ''}`);
     } else if (result.errorKind === 'timeout') {
-        // May have sent — mark DEG to avoid a second report (live only)
-        if (!isTestMode) {
-            await markDegReportSent();
+        const outcome = result.lastSendOutcome;
+        if (outcome && outcome.status === 'failed') {
+            // Server confirmed the DEG send FAILED → retry within the 23h window.
+            const now = new Date();
+            if (now.getHours() === 23 && now.getMinutes() < 50) {
+                chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
+                await addCaptureLog('error', `DEG 23h: server xác nhận gửi THẤT BẠI. Retry sau 10 phút.`);
+            } else {
+                await addCaptureLog('error', `DEG 23h: server xác nhận gửi THẤT BẠI. Hết cửa sổ retry trong ngày.`);
+            }
+        } else {
+            // Unresolved / may have sent — mark DEG to avoid a second report (live only)
+            if (!isTestMode) {
+                await markDegReportSent();
+            }
+            await addCaptureLog('error', `DEG 23h timeout (có thể đã gửi). Đánh dấu đã gửi để tránh trùng.`);
         }
-        await addCaptureLog('error', `DEG 23h timeout (có thể đã gửi). Đánh dấu đã gửi để tránh trùng.`);
     } else if (result.errorKind === 'busy') {
         const now = new Date();
         if (now.getHours() === 23 && now.getMinutes() < 50) {
@@ -1605,10 +1690,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                             ? ' (đã queue, ack chưa xác nhận)'
                             : (ack != null ? ` (ack=${ack})` : ''));
                     await addCaptureLog('success', `Capture thủ công thành công.${extra}`);
-                } else if (result.errorKind === 'timeout' && force22h && !isTest) {
-                    await markDegReportSent();
-                    await chrome.alarms.clear('dom-capture-deg-fallback');
-                    await addCaptureLog('error', `Capture thủ công timeout (có thể đã gửi). Đánh dấu DEG để tránh trùng.`);
+                } else if (result.errorKind === 'timeout') {
+                    if (result.lastSendOutcome && result.lastSendOutcome.status === 'failed') {
+                        await addCaptureLog('error', `Capture thủ công timeout — server xác nhận gửi THẤT BẠI (${result.lastSendOutcome.detail || 'không rõ'}).`);
+                    } else if (force22h && !isTest) {
+                        await markDegReportSent();
+                        await chrome.alarms.clear('dom-capture-deg-fallback');
+                        await addCaptureLog('error', 'Capture thủ công timeout (có thể đã gửi). Đánh dấu DEG để tránh trùng.');
+                    } else {
+                        await addCaptureLog('error', 'Capture thủ công timeout (có thể đã gửi).');
+                    }
                 } else {
                     await addCaptureLog('error', `Capture thủ công thất bại: ${result.error}`);
                 }
