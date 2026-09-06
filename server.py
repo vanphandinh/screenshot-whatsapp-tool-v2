@@ -47,6 +47,10 @@ _config_cache_mtime = None
 _config_lock = threading.RLock()  # RLock: load_config may call save_config via _ensure_api_token
 _wa_init_lock = threading.Lock()
 _wa_boot_grace_until = 0.0
+# Last WhatsApp send outcome — surfaced via /api/status so the extension can tell a
+# confirmed failure apart from an unknown/duplicate-risk timeout (BND-001).
+_last_send_outcome = None
+_last_send_outcome_lock = threading.Lock()
 # Idempotency: remember recent successful capture_ids (avoid duplicate WA sends)
 _recent_capture_ids = {}
 _recent_capture_lock = threading.Lock()
@@ -425,6 +429,15 @@ def init_whatsapp():
         log("WhatsApp init already in progress — skip", "WARNING")
         return
     try:
+        if _wa_send_lock.locked():
+            # A WhatsApp send is using the browser page right now — tearing the session
+            # down here would kill that send mid-flight ("Execution context was destroyed").
+            # Skip this reconnect; the health loop will retry once the send finishes.
+            log(
+                "WhatsApp send in progress — skipping re-init (will retry after send completes)",
+                "WARNING",
+            )
+            return
         old_creator = whatsapp_creator
         if old_creator is not None:
             try:
@@ -784,6 +797,23 @@ def _lookup_capture(capture_id):
         return body
 
 
+def _set_send_outcome(status, detail, capture_id=None):
+    """Record the latest WhatsApp send outcome (surfaced via /api/status)."""
+    global _last_send_outcome
+    with _last_send_outcome_lock:
+        _last_send_outcome = {
+            "status": status,
+            "detail": detail or "",
+            "capture_id": capture_id or None,
+            "at": datetime.now().isoformat(),
+        }
+
+
+def _get_send_outcome():
+    with _last_send_outcome_lock:
+        return dict(_last_send_outcome) if _last_send_outcome else None
+
+
 @app.route('/api/status', methods=['GET'])
 def status():
     """Health check endpoint (no auth — does not expose secrets)."""
@@ -820,6 +850,7 @@ def status():
         "version": "1.0.0",
         "whatsapp_connected": wa_connected,
         "whatsapp_send_busy": _wa_send_lock.locked(),
+        "last_send_outcome": _get_send_outcome(),
         "recipient_configured": recipient_ok,
         "test_recipient_configured": test_recipient_ok,
         "token_valid": token_valid,
@@ -1127,6 +1158,7 @@ def capture():
                         f.result(timeout=WHATSAPP_SEND_HARD_CEILING_SEC)
                         log("Late WA send completed after HTTP timeout", "SUCCESS")
                         _remember_capture(cid, body)
+                        _set_send_outcome("success", "Late send completed after HTTP timeout", cid)
                         try:
                             if screenshot_path and os.path.exists(screenshot_path):
                                 os.remove(screenshot_path)
@@ -1138,13 +1170,22 @@ def capture():
                             "resetting send executor and releasing lock",
                             "ERROR"
                         )
+                        _set_send_outcome(
+                            "wedged",
+                            "WhatsApp send wedged >600s and was abandoned",
+                            cid,
+                        )
                         _reset_send_executor()
                         try:
+                            # cancel_futures can't kill the running thread; the lock is
+                            # released below, after which init_whatsapp's send-lock guard
+                            # (SRV-001) will let the re-init proceed safely.
                             threading.Thread(target=init_whatsapp, daemon=True).start()
                         except Exception:
                             pass
                     except Exception as wait_err:
                         log(f"Background WA send after timeout ended with: {wait_err}", "WARNING")
+                        _set_send_outcome("failed", f"Late send failed: {wait_err}", cid)
                     finally:
                         _wa_send_started_at = None
                         _wa_send_lock.release()
@@ -1162,6 +1203,7 @@ def capture():
                     "caption": caption
                 }), 504
 
+            _set_send_outcome("success", "WhatsApp report sent successfully", capture_id)
             log("Report sent successfully!", "SUCCESS")
             _wa_send_started_at = None
             try:
@@ -1188,6 +1230,7 @@ def capture():
             return jsonify(success_body)
         except Exception as e:
             log(f"WhatsApp sending error: {e}\n{traceback.format_exc()}", "ERROR")
+            _set_send_outcome("failed", f"WhatsApp send failed: {str(e)[:300]}", capture_id)
             return jsonify({
                 "success": False,
                 "error": "WhatsApp send failed",
