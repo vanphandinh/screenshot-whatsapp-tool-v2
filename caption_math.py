@@ -5,10 +5,15 @@ M (bảo trì) và F (lỗi) được suy ra trực tiếp từ dữ liệu scra
   F = số TB có công suất <= 0 và TBS ∈ {fault stop}
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 """
+from typing import Optional
 
 MAINT_TBS = frozenset({"service mode", "hmi stop"})
 FAULT_TBS = frozenset({"fault stop"})
 MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
+
+# Caption formatting helpers (pure, no Flask deps)
+CAPTION_PREFIX = "BC BLĐ: Hiện tại"
+DEG_SUFFIX_TEMPLATE = " Sản lượng đầu cực đến thời điểm hiện tại đạt {deg} MWh."
 
 
 class CaptionMathError(Exception):
@@ -137,6 +142,75 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
         else:
             statuses[i] = "low_wind"
     return statuses
+
+
+def _format_one_decimal(value: float) -> str:
+    """Format AWS/TAP/DEG with one decimal, strip trailing .0 (e.g. 5.0→5, 5.3→5.3)."""
+    return f"{float(value):.1f}".rstrip("0").rstrip(".")
+
+
+def is_all_low_wind(*, active: int, low_wind: int, m_eff: int, f_eff: int) -> bool:
+    """
+    Strict-12 rule: cả 12 TB đều dừng do gió thấp, không lẫn lỗi/bảo trì.
+    Áp dụng cho cả live và test (is_test không ảnh hưởng caption).
+    """
+    return active == 0 and low_wind == 12 and m_eff == 0 and f_eff == 0
+
+
+def build_caption(
+    *,
+    active: int,
+    low_wind: int,
+    m_eff: int,
+    f_eff: int,
+    aws_num: float,
+    tap_num: float,
+    deg_display: Optional[str] = None,
+    force_22h: bool = False,
+    mi_enabled: bool = False,
+) -> str:
+    """
+    Build WhatsApp caption. Pure function — easy to unit-test.
+
+    - Khi is_all_low_wind (active==0 && low_wind==12 && m==0 && f==0):
+      rút gọn, KHÔNG gửi `tốc độ gió` và `công suất phát`.
+    - DEG vẫn được gắn nếu force_22h và deg_display có giá trị (giữ hành vi 22h/23h cũ).
+    - Áp dụng cho cả is_test và live (không phân biệt).
+
+    Returns caption string ending with '.' (và có thể thêm câu DEG).
+    """
+    # Validate core counts are ints
+    active = int(active)
+    low_wind = int(low_wind)
+    m_eff = int(m_eff)
+    f_eff = int(f_eff)
+
+    aws_display = _format_one_decimal(aws_num)
+    tap_display = _format_one_decimal(tap_num)
+
+    # MI: low_wind đã loại phần fold, luôn hiện nếu >0; legacy: ẩn khi AWS >=6
+    show_low_wind = (low_wind > 0) if mi_enabled else (low_wind > 0 and float(aws_num) < 6)
+
+    if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
+        # Rút gọn: chỉ giữ số liệu TB, bỏ gió/công suất
+        caption = f"{CAPTION_PREFIX} {active} TB đang hoạt động, {low_wind} TB dừng do tốc độ gió thấp."
+    else:
+        caption = (
+            f"{CAPTION_PREFIX} {active} TB đang hoạt động, "
+            + (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "")
+            + (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "")
+            + (f"{f_eff} TB dừng do bị lỗi, " if f_eff > 0 else "")
+            + f"tốc độ gió {aws_display} m/s, "
+            + f"công suất phát {tap_display} MW."
+        )
+
+    # DEG: giữ nguyên hành vi 22h/23h — không bị ảnh hưởng bởi rút gọn
+    deg_str = (deg_display or "").strip()
+    if force_22h and deg_str:
+        # deg_str đã được format ở server (deg_display), chỉ cần gắn
+        caption += DEG_SUFFIX_TEMPLATE.format(deg=deg_str)
+
+    return caption
 
 
 def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False, turbines=None):

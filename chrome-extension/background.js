@@ -19,10 +19,8 @@ const REQUIRED_FIELDS = [
 const DEFAULT_CONFIG = {
     serverUrl: 'http://127.0.0.1:5001',
     targetUrl: '',
-    intervalMinutes: 60,
     selectors: Object.fromEntries(REQUIRED_FIELDS.map(f => [f, ''])),
     autoCapture: false,  // Default OFF as requested
-    retryMinutes: 5,
     scheduleMode: '15min', // '15min' = 0-15 phút, '30min' = 0-30 phút
     intervalHours: 1,      // 1 = mỗi giờ, 2 = mỗi 2 giờ
     apiToken: '',          // Must match server config.json api_token
@@ -359,32 +357,6 @@ async function markDegReportSent() {
     return new Promise((resolve) => {
         chrome.storage.local.set({ degReportDate: getTodayDateString() }, resolve);
     });
-}
-
-/**
- * Check if the regular schedule will hit hour 22.
- * For interval=1, every hour is hit so 22 is always covered.
- * For interval=2, check if any scheduled hour equals 22.
- * We determine the schedule's starting hour from the first run pattern:
- *   hours are: startHour, startHour+2, startHour+4, ... mod 24
- * Since the schedule anchors to the current hour at start, we check
- * if 22 % intervalHours === currentAnchorHour % intervalHours.
- */
-function willScheduleHit22(intervalHours) {
-    if (intervalHours <= 1) return true;
-    // For 2h interval: even hours (0,2,4,...,20,22) or odd hours (1,3,...,21,23)
-    // 22 is even, so if the anchor is even, 22 will be hit
-    // General: 22 mod interval === anchor mod interval
-    // Since we schedule at "current hour + interval", the anchor is effectively
-    // determined by the current hour pattern. We check all possible hours:
-    for (let h = 0; h < 24; h += intervalHours) {
-        if (h === 22) return true;
-    }
-    // Also check odd-start pattern
-    for (let h = 1; h < 24; h += intervalHours) {
-        if (h === 22) return true;
-    }
-    return false;
 }
 
 /**

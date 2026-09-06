@@ -28,7 +28,9 @@ import psutil
 import pyperclip
 from caption_math import (
     CaptionMathError,
+    build_caption,
     compute_caption_counts,
+    is_all_low_wind,
     parse_manual_intervention,
 )
 
@@ -41,7 +43,6 @@ WA_ACK_POLL_INTERVAL_SEC = 0.5
 WA_ACK_SENT = 1  # AckType.SENT — left client toward WhatsApp servers
 _send_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wa-send")
 _wa_send_lock = threading.Lock()
-_wa_send_started_at = None
 _config_cache = None
 _config_cache_mtime = None
 _config_lock = threading.RLock()  # RLock: load_config may call save_config via _ensure_api_token
@@ -1077,31 +1078,28 @@ def capture():
                 log(msg, "ERROR")
                 return jsonify({"success": False, "error": msg, "error_code": "SCREENSHOT_FAILED"}), 503
 
+            # Build caption via pure function (caption_math) — rút gọn khi 12 TB gió thấp
+            caption = build_caption(
+                active=active,
+                low_wind=low_wind,
+                m_eff=m_eff,
+                f_eff=f_eff,
+                aws_num=aws_num,
+                tap_num=tap_num,
+                deg_display=deg_display,
+                force_22h=force_22h,
+                mi_enabled=mi_enabled,
+            )
+            # Display values for response payload (keep same formatting as caption)
             aws_display = f"{aws_num:.1f}".rstrip('0').rstrip('.')
             tap_display = f"{tap_num:.1f}".rstrip('0').rstrip('.')
-            # MI: low_wind already excludes folded scrape portion; always show if > 0
-            # (override gió thấp must appear even when AWS >= 6). Legacy: hide when AWS >= 6.
-            show_low_wind = (
-                (low_wind > 0) if mi_enabled else (low_wind > 0 and aws_num < 6)
-            )
-            caption = (
-                f"BC BLĐ: Hiện tại {active} TB đang hoạt động, " +
-                (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "") +
-                (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "") +
-                (f"{f_eff} TB dừng do bị lỗi, " if f_eff > 0 else "") +
-                f"tốc độ gió {aws_display} m/s, "
-                f"công suất phát {tap_display} MW."
-            )
-
-            if force_22h and deg_display:
-                caption += f" Sản lượng đầu cực đến thời điểm hiện tại đạt {deg_display} MWh."
 
             log(f"Caption: {caption}", "SUCCESS")
+            if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
+                log("Caption rút gọn do 12 TB gió thấp (ẩn AWS/TAP) — áp dụng cho cả live/test", "INFO")
 
             msg_type_log = "TEST" if is_test else "LIVE"
             log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
-            global _wa_send_started_at
-            _wa_send_started_at = time.time()
             # Prefer _send_whatsapp_image (no sendMsgResult wait) — stock sendImage often hangs >150s
             img_filename = os.path.basename(screenshot_path) if screenshot_path else "capture.png"
             future = _send_executor.submit(
@@ -1133,7 +1131,6 @@ def capture():
                 }
 
                 def _release_after_send(f, cid, body):
-                    global _wa_send_started_at
                     try:
                         f.result(timeout=WHATSAPP_SEND_HARD_CEILING_SEC)
                         log("Late WA send completed after HTTP timeout", "SUCCESS")
@@ -1167,7 +1164,6 @@ def capture():
                         log(f"Background WA send after timeout ended with: {wait_err}", "WARNING")
                         _set_send_outcome("failed", f"Late send failed: {wait_err}", cid)
                     finally:
-                        _wa_send_started_at = None
                         _wa_send_lock.release()
 
                 threading.Thread(
@@ -1185,7 +1181,6 @@ def capture():
 
             _set_send_outcome("success", "WhatsApp report sent successfully", capture_id)
             log("Report sent successfully!", "SUCCESS")
-            _wa_send_started_at = None
             try:
                 os.remove(screenshot_path)
                 log(f"Deleted screenshot after send: {screenshot_path}", "DEBUG")
@@ -1295,7 +1290,6 @@ class LogWindow:
 class GroupWindow:
     def __init__(self):
         self.root = None
-        self.frame = None
 
     def create(self):
         if self.root:
@@ -1566,7 +1560,6 @@ def setup_tray():
             save_config(config)
             log(f"Logout on quit set to: {new_val}", "INFO")
 
-        config = load_config()
         def reconnect_whatsapp(icon, item):
             log("Manual WhatsApp reconnect requested...", "ACTION")
             threading.Thread(target=init_whatsapp, daemon=True).start()
