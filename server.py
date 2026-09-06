@@ -974,7 +974,9 @@ def capture():
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD"}), 400
 
-        # Sign / range checks — reject bad data instead of sending a distorted caption
+        # Sign / range checks — reject bad data instead of sending a distorted caption.
+        # TAP chỉ cần là số (đã được parse_number kiểm tra ở trên): giá trị âm là hợp lệ
+        # khi nhiều turbine có công suất âm, không giới hạn 0..100 nữa.
         if dc_num < 0 or dc_num > 12:
             msg = f"DC out of range (0..12): {dc_num}"
             log(msg, "ERROR")
@@ -987,10 +989,6 @@ def capture():
             msg = f"AWS out of range (0..50 m/s): {aws_num}"
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "AWS"}), 400
-        if tap_num < 0 or tap_num > 100:
-            msg = f"TAP out of range (0..100 MW): {tap_num}"
-            log(msg, "ERROR")
-            return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "TAP"}), 400
 
         deg_display = deg
         if force_22h and deg:
