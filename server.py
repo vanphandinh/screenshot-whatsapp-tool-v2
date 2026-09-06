@@ -28,7 +28,9 @@ import psutil
 import pyperclip
 from caption_math import (
     CaptionMathError,
+    build_caption,
     compute_caption_counts,
+    is_all_low_wind,
     parse_manual_intervention,
 )
 
@@ -1077,26 +1079,25 @@ def capture():
                 log(msg, "ERROR")
                 return jsonify({"success": False, "error": msg, "error_code": "SCREENSHOT_FAILED"}), 503
 
+            # Build caption via pure function (caption_math) — rút gọn khi 12 TB gió thấp
+            caption = build_caption(
+                active=active,
+                low_wind=low_wind,
+                m_eff=m_eff,
+                f_eff=f_eff,
+                aws_num=aws_num,
+                tap_num=tap_num,
+                deg_display=deg_display,
+                force_22h=force_22h,
+                mi_enabled=mi_enabled,
+            )
+            # Display values for response payload (keep same formatting as caption)
             aws_display = f"{aws_num:.1f}".rstrip('0').rstrip('.')
             tap_display = f"{tap_num:.1f}".rstrip('0').rstrip('.')
-            # MI: low_wind already excludes folded scrape portion; always show if > 0
-            # (override gió thấp must appear even when AWS >= 6). Legacy: hide when AWS >= 6.
-            show_low_wind = (
-                (low_wind > 0) if mi_enabled else (low_wind > 0 and aws_num < 6)
-            )
-            caption = (
-                f"BC BLĐ: Hiện tại {active} TB đang hoạt động, " +
-                (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "") +
-                (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "") +
-                (f"{f_eff} TB dừng do bị lỗi, " if f_eff > 0 else "") +
-                f"tốc độ gió {aws_display} m/s, "
-                f"công suất phát {tap_display} MW."
-            )
-
-            if force_22h and deg_display:
-                caption += f" Sản lượng đầu cực đến thời điểm hiện tại đạt {deg_display} MWh."
 
             log(f"Caption: {caption}", "SUCCESS")
+            if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
+                log("Caption rút gọn do 12 TB gió thấp (ẩn AWS/TAP) — áp dụng cho cả live/test", "INFO")
 
             msg_type_log = "TEST" if is_test else "LIVE"
             log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
