@@ -5,6 +5,7 @@ M (bảo trì) và F (lỗi) được suy ra trực tiếp từ dữ liệu scra
   F = số TB có công suất <= 0 và TBS ∈ {fault stop}
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 """
+from typing import Optional
 
 MAINT_TBS = frozenset({"service mode", "hmi stop"})
 FAULT_TBS = frozenset({"fault stop"})
@@ -164,7 +165,7 @@ def build_caption(
     f_eff: int,
     aws_num: float,
     tap_num: float,
-    deg_display: str | None = None,
+    deg_display: Optional[str] = None,
     force_22h: bool = False,
     mi_enabled: bool = False,
 ) -> str:
