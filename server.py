@@ -43,7 +43,6 @@ WA_ACK_POLL_INTERVAL_SEC = 0.5
 WA_ACK_SENT = 1  # AckType.SENT — left client toward WhatsApp servers
 _send_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wa-send")
 _wa_send_lock = threading.Lock()
-_wa_send_started_at = None
 _config_cache = None
 _config_cache_mtime = None
 _config_lock = threading.RLock()  # RLock: load_config may call save_config via _ensure_api_token
@@ -1101,8 +1100,6 @@ def capture():
 
             msg_type_log = "TEST" if is_test else "LIVE"
             log(f"Sending image to {target_number} ({msg_type_log})...", "ACTION")
-            global _wa_send_started_at
-            _wa_send_started_at = time.time()
             # Prefer _send_whatsapp_image (no sendMsgResult wait) — stock sendImage often hangs >150s
             img_filename = os.path.basename(screenshot_path) if screenshot_path else "capture.png"
             future = _send_executor.submit(
@@ -1134,7 +1131,6 @@ def capture():
                 }
 
                 def _release_after_send(f, cid, body):
-                    global _wa_send_started_at
                     try:
                         f.result(timeout=WHATSAPP_SEND_HARD_CEILING_SEC)
                         log("Late WA send completed after HTTP timeout", "SUCCESS")
@@ -1168,7 +1164,6 @@ def capture():
                         log(f"Background WA send after timeout ended with: {wait_err}", "WARNING")
                         _set_send_outcome("failed", f"Late send failed: {wait_err}", cid)
                     finally:
-                        _wa_send_started_at = None
                         _wa_send_lock.release()
 
                 threading.Thread(
@@ -1186,7 +1181,6 @@ def capture():
 
             _set_send_outcome("success", "WhatsApp report sent successfully", capture_id)
             log("Report sent successfully!", "SUCCESS")
-            _wa_send_started_at = None
             try:
                 os.remove(screenshot_path)
                 log(f"Deleted screenshot after send: {screenshot_path}", "DEBUG")
@@ -1296,7 +1290,6 @@ class LogWindow:
 class GroupWindow:
     def __init__(self):
         self.root = None
-        self.frame = None
 
     def create(self):
         if self.root:
@@ -1567,7 +1560,6 @@ def setup_tray():
             save_config(config)
             log(f"Logout on quit set to: {new_val}", "INFO")
 
-        config = load_config()
         def reconnect_whatsapp(icon, item):
             log("Manual WhatsApp reconnect requested...", "ACTION")
             threading.Thread(target=init_whatsapp, daemon=True).start()
