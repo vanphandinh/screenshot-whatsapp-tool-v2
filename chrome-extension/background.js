@@ -7,8 +7,9 @@
 // =============================================================================
 
 // Các trường dữ liệu server yêu cầu (phải khớp tên với server.py)
+// Lưu ý: không còn F/M — server tự tính từ TBS (service mode/hmi stop/fault stop) + công suất
 const REQUIRED_FIELDS = [
-    'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
+    'DC', 'AWS', 'TAP', 'DEG',
     'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
     'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12',
     'TBS1', 'TBS2', 'TBS3', 'TBS4', 'TBS5', 'TBS6',
@@ -261,6 +262,9 @@ async function getConfig() {
             if (result.config) {
                 // Merge selectors: giữ giá trị người dùng đã cấu hình, thêm các trường còn thiếu với giá trị rỗng
                 const mergedSelectors = { ...DEFAULT_CONFIG.selectors, ...result.config.selectors };
+                // Migration: bỏ F/M scrape — server không nhận 2 trường này nữa
+                delete mergedSelectors.F;
+                delete mergedSelectors.M;
                 const miStored = result.config.manualIntervention || {};
                 const manualIntervention = {
                     enabled: Boolean(miStored.enabled),

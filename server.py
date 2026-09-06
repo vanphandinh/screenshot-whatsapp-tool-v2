@@ -949,8 +949,6 @@ def capture():
         dc = get_val("DC")
         aws = get_val("AWS")
         tap = get_val("TAP")
-        f_val = get_val("F")
-        m_val = get_val("M")
         deg = get_val("DEG")
         tb_names = [f"TB{i}" for i in range(1, 13)]
         tb_raw = [get_val(n) for n in tb_names]
@@ -970,8 +968,9 @@ def capture():
             }), 400
 
         # DEG only required for 22h/DEG report; hourly runs must not fail on empty DEG
+        # F/M no longer accepted from the extension — derived server-side from TBS + power
         missing = []
-        for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap), ("F", f_val), ("M", m_val)]:
+        for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap)]:
             if not val:
                 missing.append(name)
         if force_22h and not deg:
@@ -996,12 +995,10 @@ def capture():
 
         try:
             dc_num = int(parse_number(dc))
-            f_num = int(parse_number(f_val))
-            m_num = int(parse_number(m_val))
             aws_num = parse_number(aws)
             tap_num = parse_number(tap)
         except ValueError:
-            msg = f"Invalid numeric value in DC/AWS/TAP/F/M: DC={dc}, AWS={aws}, TAP={tap}, F={f_val}, M={m_val}"
+            msg = f"Invalid numeric value in DC/AWS/TAP: DC={dc}, AWS={aws}, TAP={tap}"
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD"}), 400
 
@@ -1012,10 +1009,6 @@ def capture():
             msg = f"DC out of range (0..12): {dc_num}"
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "DC"}), 400
-        if f_num < 0 or m_num < 0:
-            msg = f"F/M must be >= 0 (F={f_num}, M={m_num})"
-            log(msg, "ERROR")
-            return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD"}), 400
         if aws_num < 0 or aws_num > 50:
             msg = f"AWS out of range (0..50 m/s): {aws_num}"
             log(msg, "ERROR")
@@ -1035,7 +1028,7 @@ def capture():
 
         try:
             counts = compute_caption_counts(
-                tb_values, tbs_raw, f_num, m_num, dc_num, aws_num,
+                tb_values, tbs_raw, dc_num, aws_num,
                 mi_enabled=mi_enabled, turbines=mi_turbines,
             )
         except CaptionMathError as e:
@@ -1049,24 +1042,11 @@ def capture():
         f_eff = counts["f_eff"]
         active = counts["active"]
         low_wind = counts["low_wind"]
-        m_eff_source = counts["m_eff_source"]
 
         if mi_enabled:
             log(
                 f"Manual intervention ON turbines={mi_turbines} "
-                f"phase1={counts.get('phase1')} phase2={counts.get('phase2')} "
-                f"clamped={counts.get('clamped')}",
-                "INFO",
-            )
-        if counts.get("clamped") and counts.get("phase1"):
-            log(
-                f"Phase1 F/M clamped to subset inactive "
-                f"(scraped F={f_num}, M={m_num}) → f={counts['phase1']['f']}, m={counts['phase1']['m']}",
-                "WARNING",
-            )
-        if (not mi_enabled) and m_eff_source == "tbs" and m_num != m_eff:
-            log(
-                f"m_eff={m_eff} from TBS (ignored scraped M={m_num})",
+                f"phase1={counts.get('phase1')} phase2={counts.get('phase2')}",
                 "INFO",
             )
 
@@ -1147,7 +1127,7 @@ def capture():
                     "is_test": is_test,
                     "values": {
                         "DC": dc, "AWS": aws_display, "TAP": tap_display,
-                        "F": str(f_eff), "M": str(m_eff), "DEG": deg_display,
+                        "DEG": deg_display,
                         "active": str(active)
                     }
                 }
@@ -1222,7 +1202,7 @@ def capture():
                 "wa_verified": wa_meta.get("verified"),
                 "values": {
                     "DC": dc, "AWS": aws_display, "TAP": tap_display,
-                    "F": str(f_eff), "M": str(m_eff), "DEG": deg_display,
+                    "DEG": deg_display,
                     "active": str(active)
                 }
             }

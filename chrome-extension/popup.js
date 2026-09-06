@@ -4,8 +4,9 @@
 // =============================================================================
 
 // Các trường dữ liệu bắt buộc server yêu cầu (phải khớp với server.py và background.js)
+// Lưu ý: không còn F/M — server tự tính từ TBS (service mode/hmi stop/fault stop) + công suất
 const REQUIRED_FIELDS = [
-    'DC', 'AWS', 'TAP', 'F', 'M', 'DEG',
+    'DC', 'AWS', 'TAP', 'DEG',
     'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
     'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12',
     'TBS1', 'TBS2', 'TBS3', 'TBS4', 'TBS5', 'TBS6',
@@ -42,10 +43,11 @@ const logs = [];
 
 // ─── Test Scenarios: mock data for each caption case ───
 // TB values: >0 = active, <=0 = inactive
-// low_wind = inactive_count - F - m_eff
-// m_eff: if any TB ≤0 with TBS in {Service mode, HMI stop} → count those; else use scraped M
+// Luật tính phía server (không còn F/M scrape):
+//   m_eff = số TB ≤0 có TBS ∈ {Service mode, HMI stop}  → "đang bảo trì"
+//   f_eff = số TB ≤0 có TBS ∈ {Fault stop}              → "bị lỗi"
+//   TB ≤0 còn lại → low_wind; AWS ≥ 6 → fold low_wind vào active
 // Điều kiện hiển thị "gió thấp": low_wind > 0 AND AWS < 6
-// Inactive TB without TBS-maint use "Warning Character Code" so scraped-M scenarios stay on M branch
 function withTbs(scenario, overrides = {}) {
     const out = { ...scenario };
     for (let i = 1; i <= 12; i++) {
@@ -63,35 +65,27 @@ function withTbs(scenario, overrides = {}) {
 
 const TEST_SCENARIOS = {
     // All active, no issues
-    normal: withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false }),
+    normal: withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false }),
     // All active + 22h report
-    '22h': withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', F: '0', M: '0', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true }),
-    // Low wind only: 3 TB inactive (TB10,11,12<=0), F=0, M=0 → low_wind=3, AWS<6 → hiện "gió thấp"
-    low_wind: withTbs({ DC: '12', AWS: '2.1', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Wind high AWS: 3 TB ≤0, F=0, M=0 → low_wind=3 nhưng AWS≥6 → không hiện "gió thấp";
-    // các TB đó coi như đang reset tạm → vẫn cộng vào "đang hoạt động" (active=12)
-    wind_high_aws: withTbs({ DC: '12', AWS: '7.5', TAP: '13.5', F: '0', M: '0', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Maintenance only: 2 TB inactive, M=2, F=0 → low_wind=0 (TBS không Service/HMI → dùng M)
-    maintenance: withTbs({ DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '2', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false }),
-    // Error only: 1 TB inactive, F=1, M=0 → low_wind=0
-    error: withTbs({ DC: '12', AWS: '5.3', TAP: '16.5', F: '1', M: '0', DEG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false }),
-    // Low wind + Maintenance: 5 inactive, M=2, F=0 → low_wind=3
-    wind_maint: withTbs({ DC: '12', AWS: '2.1', TAP: '10.5', F: '0', M: '2', DEG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Low wind + Error: 4 inactive, F=1, M=0 → low_wind=3
-    wind_error: withTbs({ DC: '12', AWS: '2.1', TAP: '12.0', F: '1', M: '0', DEG: '88.6', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Maintenance + Error: 3 inactive, M=2, F=1 → low_wind=0
-    maint_error: withTbs({ DC: '12', AWS: '5.3', TAP: '13.5', F: '1', M: '2', DEG: '100.7', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // All conditions, no 22h: 6 inactive, M=2, F=1 → low_wind=3
-    all_no22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
+    '22h': withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true }),
+    // Low wind only: 3 TB inactive (TB10,11,12<=0, TBS thường) → low_wind=3, AWS<6 → hiện "gió thấp"
+    low_wind: withTbs({ DC: '12', AWS: '2.1', TAP: '13.5', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
+    // Wind high AWS: 3 TB ≤0 (TBS thường) → low_wind=3 nhưng AWS≥6 → fold vào active (active=12)
+    wind_high_aws: withTbs({ DC: '12', AWS: '7.5', TAP: '13.5', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
+    // Maintenance only: TB11 Service mode + TB12 HMI stop (≤0) → m_eff=2, low_wind=0
+    maintenance: withTbs({ DC: '12', AWS: '5.3', TAP: '15.0', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
+    // Error only: TB12 Fault stop (≤0) → f_eff=1, low_wind=0
+    error: withTbs({ DC: '12', AWS: '5.3', TAP: '16.5', DEG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false }, { TBS12: 'Fault stop' }),
+    // Low wind + Maintenance: 5 inactive (TB8-12), TB11+TB12 bảo trì → m_eff=2, low_wind=3
+    wind_maint: withTbs({ DC: '12', AWS: '2.1', TAP: '10.5', DEG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
+    // Low wind + Error: 4 inactive (TB9-12), TB12 Fault stop → f_eff=1, low_wind=3
+    wind_error: withTbs({ DC: '12', AWS: '2.1', TAP: '12.0', DEG: '88.6', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS12: 'Fault stop' }),
+    // Maintenance + Error: 3 inactive (TB10-12): TB10 Fault stop, TB11 Service mode, TB12 HMI stop → f_eff=1, m_eff=2, low_wind=0
+    maint_error: withTbs({ DC: '12', AWS: '5.3', TAP: '13.5', DEG: '100.7', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS10: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
+    // All conditions, no 22h: 6 inactive (TB7-12): TB7 Fault stop, TB11+TB12 bảo trì → f=1, m=2, low_wind=3
+    all_no22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS7: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
     // All conditions + 22h report
-    all_22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', F: '1', M: '2', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }),
-    // TBS-maint ưu tiên: M=5 lệch, chỉ TB11 Service mode + TB12 HMI stop → m_eff=2 (bỏ M)
-    maint_from_tbs: withTbs({
-        DC: '12', AWS: '5.3', TAP: '15.0', F: '0', M: '5', DEG: '110.5',
-        TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4',
-        TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0',
-        force_22h: false
-    }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
+    all_22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }, { TBS7: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
 };
 
 // ─── Init ───
