@@ -2,13 +2,13 @@
 
 M (bảo trì) và F (lỗi) được suy ra trực tiếp từ dữ liệu scrape:
   M = số TB có công suất <= 0 và TBS ∈ {service mode, hmi stop}
-  F = số TB có công suất <= 0 và TBS ∈ {fault stop}
+  F = số TB có công suất <= 0 và TBS ∈ {fault stop, fault character}
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 """
 from typing import Optional
 
 MAINT_TBS = frozenset({"service mode", "hmi stop"})
-FAULT_TBS = frozenset({"fault stop"})
+FAULT_TBS = frozenset({"fault stop", "fault character"})
 MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
 
 # Caption formatting helpers (pure, no Flask deps)
@@ -90,7 +90,7 @@ def _count_maintenance(tb_values, tbs_raw):
 
 
 def _count_fault(tb_values, tbs_raw):
-    """F = các TB có công suất <= 0 và TBS ở trạng thái lỗi (fault stop)."""
+    """F = các TB có công suất <= 0 và TBS ở trạng thái lỗi (fault stop/fault character)."""
     return sum(
         1 for tb, tbs in zip(tb_values, tbs_raw)
         if tb <= 0 and _norm_tbs(tbs) in FAULT_TBS
@@ -218,7 +218,7 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False
     Compute active / m_eff / f_eff / low_wind for WhatsApp caption.
 
     m_eff = TBs with power <= 0 and TBS in MAINT_TBS (service mode / hmi stop)
-    f_eff = TBs with power <= 0 and TBS in FAULT_TBS (fault stop)
+    f_eff = TBs with power <= 0 and TBS in FAULT_TBS (fault stop / fault character)
 
     When mi_enabled is False or turbines empty: full-farm math.
     When mi_enabled with overrides:
