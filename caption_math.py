@@ -7,7 +7,7 @@ Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 """
 from typing import Optional
 
-MAINT_TBS = frozenset({"service mode", "hmi stop"})
+MAINT_TBS = frozenset({"service mode", "hmi stop", "maintenance"})
 FAULT_TBS = frozenset({"fault stop", "fault character"})
 MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
 
