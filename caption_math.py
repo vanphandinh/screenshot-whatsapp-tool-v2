@@ -1,14 +1,14 @@
 """Caption count math + manual intervention parsing (no Flask deps).
 
 M (bảo trì) và F (lỗi) được suy ra trực tiếp từ dữ liệu scrape:
-  M = số TB có công suất <= 0 và TBS ∈ {service mode, hmi stop}
-  F = số TB có công suất <= 0 và TBS ∈ {fault stop, fault character}
+  M = số TB có công suất <= 0 và TBS chứa cụm {service mode, hmi stop, maintenance}
+  F = số TB có công suất <= 0 và TBS chứa cụm {fault stop, fault character}
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 """
 from typing import Optional
 
-MAINT_TBS = frozenset({"service mode", "hmi stop", "maintenance"})
-FAULT_TBS = frozenset({"fault stop", "fault character"})
+MAINT_TBS = ("service mode", "hmi stop", "maintenance")
+FAULT_TBS = ("fault stop", "fault character")
 MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
 
 # Caption formatting helpers (pure, no Flask deps)
@@ -28,6 +28,16 @@ class CaptionMathError(Exception):
 
 def _norm_tbs(s):
     return " ".join(str(s).replace("\u00a0", " ").split()).casefold()
+
+
+def _is_fault_tbs(norm: str) -> bool:
+    """True nếu chuỗi TBS đã chuẩn hóa chứa một cụm lỗi (include theo cụm)."""
+    return any(p in norm for p in FAULT_TBS)
+
+
+def _is_maint_tbs(norm: str) -> bool:
+    """True nếu chuỗi TBS đã chuẩn hóa chứa một cụm bảo trì (include theo cụm)."""
+    return any(p in norm for p in MAINT_TBS)
 
 
 def parse_manual_intervention(raw):
@@ -82,18 +92,25 @@ def parse_manual_intervention(raw):
 
 
 def _count_maintenance(tb_values, tbs_raw):
-    """M = các TB có công suất <= 0 và TBS ở trạng thái bảo trì (service mode/hmi stop)."""
-    return sum(
-        1 for tb, tbs in zip(tb_values, tbs_raw)
-        if tb <= 0 and _norm_tbs(tbs) in MAINT_TBS
-    )
+    """M = các TB có công suất <= 0 và TBS chứa cụm bảo trì (service mode/hmi stop)."""
+    count = 0
+    for tb, tbs in zip(tb_values, tbs_raw):
+        if tb > 0:
+            continue
+        norm = _norm_tbs(tbs)
+        # Fault-first: chuỗi chứa cả 2 cụm được tính là lỗi, không tính trùng vào M
+        if _is_fault_tbs(norm):
+            continue
+        if _is_maint_tbs(norm):
+            count += 1
+    return count
 
 
 def _count_fault(tb_values, tbs_raw):
-    """F = các TB có công suất <= 0 và TBS ở trạng thái lỗi (fault stop/fault character)."""
+    """F = các TB có công suất <= 0 và TBS chứa cụm lỗi (fault stop/fault character)."""
     return sum(
         1 for tb, tbs in zip(tb_values, tbs_raw)
-        if tb <= 0 and _norm_tbs(tbs) in FAULT_TBS
+        if tb <= 0 and _is_fault_tbs(_norm_tbs(tbs))
     )
 
 
@@ -124,10 +141,10 @@ def _legacy_counts(tb_values, tbs_raw, dc_num, aws_num):
 def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
     """
     Classify each TB in only_indices (0-based) from scraped data:
-      TB > 0                          → normal
-      TB <= 0 & TBS ∈ MAINT_TBS       → maintenance
-      TB <= 0 & TBS ∈ FAULT_TBS       → error
-      else (TB <= 0, other TBS)       → low_wind
+      TB > 0                                          → normal
+      TB <= 0 & TBS chứa cụm FAULT_TBS (check trước)  → error
+      TB <= 0 & TBS chứa cụm MAINT_TBS                → maintenance
+      else (TB <= 0, other TBS)                       → low_wind
     Returns statuses[12]. Entries outside only_indices are None.
     """
     only_indices = set(only_indices)
@@ -135,10 +152,12 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
     for i in only_indices:
         if tb_values[i] > 0:
             statuses[i] = "normal"
-        elif _norm_tbs(tbs_raw[i]) in MAINT_TBS:
-            statuses[i] = "maintenance"
-        elif _norm_tbs(tbs_raw[i]) in FAULT_TBS:
+            continue
+        norm = _norm_tbs(tbs_raw[i])
+        if _is_fault_tbs(norm):
             statuses[i] = "error"
+        elif _is_maint_tbs(norm):
+            statuses[i] = "maintenance"
         else:
             statuses[i] = "low_wind"
     return statuses
@@ -217,8 +236,8 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False
     """
     Compute active / m_eff / f_eff / low_wind for WhatsApp caption.
 
-    m_eff = TBs with power <= 0 and TBS in MAINT_TBS (service mode / hmi stop)
-    f_eff = TBs with power <= 0 and TBS in FAULT_TBS (fault stop / fault character)
+    m_eff = TBs with power <= 0 and TBS chứa cụm MAINT_TBS (service mode / hmi stop)
+    f_eff = TBs with power <= 0 and TBS chứa cụm FAULT_TBS (fault stop / fault character)
 
     When mi_enabled is False or turbines empty: full-farm math.
     When mi_enabled with overrides:

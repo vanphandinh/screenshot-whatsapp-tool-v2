@@ -338,3 +338,89 @@ def test_mi_rejects_when_phase1_active_negative():
             mi_enabled=True, turbines={12: "normal"},
         )
     assert ei.value.error_code == "INCONSISTENT_COUNTS"
+
+
+# ─── Include theo cụm (thay so sánh bằng) ───
+
+def test_phrase_include_fault_suffix():
+    """TBS hậu tố 'Fault Stop - Gearbox' vẫn đếm F."""
+    tb = _tb_all_active()
+    tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[11] = "Fault Stop - Gearbox"
+    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    assert r["f_eff"] == 1
+    assert r["m_eff"] == 0
+    assert r["low_wind"] == 0
+    assert r["active"] == 11
+
+
+def test_phrase_include_maint_suffix():
+    """TBS hậu tố 'HMI Stop (manual)' / 'Service Mode - Test' vẫn đếm M."""
+    tb = _tb_all_active()
+    tb[10] = tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[10] = "HMI Stop (manual)"
+    tbs[11] = "Service Mode - Test"
+    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    assert r["m_eff"] == 2
+    assert r["f_eff"] == 0
+    assert r["low_wind"] == 0
+    assert r["active"] == 10
+
+
+def test_phrase_include_does_not_confuse_warning_with_fault():
+    """'Warning Character Code' không dính cụm 'fault character' → low_wind."""
+    tb = _tb_all_active()
+    tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[11] = "Warning Character Code"
+    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    assert r["f_eff"] == 0
+    assert r["m_eff"] == 0
+    assert r["low_wind"] == 1
+    assert r["active"] == 11
+
+
+def test_phrase_include_word_alone_not_enough():
+    """Từ rời 'stop' / 'character' không đủ — phải cả cụm."""
+    tb = _tb_all_active()
+    tb[10] = tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[10] = "Stopped by wind"
+    tbs[11] = "Character test"
+    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    assert r["f_eff"] == 0
+    assert r["m_eff"] == 0
+    assert r["low_wind"] == 2
+
+
+def test_phrase_include_fault_first_on_both():
+    """Chuỗi chứa cả 2 cụm → tính F, không double-count sang M."""
+    tb = _tb_all_active()
+    tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[11] = "Fault stop + Service mode"
+    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    assert r["f_eff"] == 1
+    assert r["m_eff"] == 0
+    assert r["low_wind"] == 0
+    assert r["active"] == 11
+
+
+def test_phrase_include_mi_phase1_with_suffix():
+    """MI phase1 phân loại đúng TBS hậu tố trên TB không override."""
+    tb = _tb_all_active()
+    tb[10] = tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[10] = "Fault Stop - Gearbox"
+    tbs[11] = "Service mode"
+    r = compute_caption_counts(
+        tb, tbs, dc_num=12, aws_num=2.0,
+        mi_enabled=True, turbines={12: "normal"},
+    )
+    assert r["phase1"]["f"] == 1
+    assert r["phase1"]["m"] == 0
+    assert r["f_eff"] == 1
+    assert r["m_eff"] == 0
+    assert r["active"] == 11
