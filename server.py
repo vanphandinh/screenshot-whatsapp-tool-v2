@@ -970,29 +970,41 @@ def capture():
 
         # DEG only required for 22h/DEG report; hourly runs must not fail on empty DEG
         # F/M no longer accepted from the extension — derived server-side from TBS + power
+        # MI: TB/TBS scrape của turbine đã can thiệp được bỏ qua (missing + invalid)
+        overridden = set(mi_turbines.keys()) if mi_enabled else set()
         missing = []
         for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap)]:
             if not val:
                 missing.append(name)
         if force_22h and not deg:
             missing.append("DEG")
-        for name, val in zip(tb_names, tb_raw):
-            if not val:
+        for idx, (name, val) in enumerate(zip(tb_names, tb_raw), start=1):
+            if not val and idx not in overridden:
                 missing.append(name)
-        for name, val in zip(tbs_names, tbs_raw):
-            if not val:
+        for idx, (name, val) in enumerate(zip(tbs_names, tbs_raw), start=1):
+            if not val and idx not in overridden:
                 missing.append(name)
         if missing:
             msg = f"Missing required fields: {', '.join(missing)}"
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "MISSING_FIELDS", "fields": missing}), 400
 
-        try:
-            tb_values = [parse_number(tb) for tb in tb_raw]
-        except ValueError:
-            msg = f"Invalid TB value: {', '.join(tb_raw)}"
-            log(msg, "ERROR")
-            return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD"}), 400
+        # MI: thay giá trị scrape của TB can thiệp bằng dummy (compute_caption_counts bỏ qua)
+        if overridden:
+            skipped = sorted(overridden)
+            log(f"Manual intervention skips scrape TB/TBS for turbines={skipped}", "INFO")
+            tbs_raw = ["" if (idx in overridden) else v for idx, v in enumerate(tbs_raw, start=1)]
+        tb_values = []
+        for idx, raw in enumerate(tb_raw, start=1):
+            if idx in overridden:
+                tb_values.append(0.0)  # dummy, ignored by compute_caption_counts phase1
+                continue
+            try:
+                tb_values.append(parse_number(raw))
+            except ValueError:
+                msg = f"Invalid TB{idx} value: {raw!r}"
+                log(msg, "ERROR")
+                return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": f"TB{idx}"}), 400
 
         try:
             dc_num = int(parse_number(dc))

@@ -898,10 +898,15 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
             }
 
             // DEG may be empty on hourly runs; required only for force22h
+            // MI: TB/TBS scrape của turbine đã can thiệp được bỏ qua (missing)
+            const miPayloadForSkip = buildManualInterventionPayload(config);
+            const miSkipped = new Set(Object.keys(miPayloadForSkip.turbines || {}).map(k => String(parseInt(k, 10))));
             let isDataValid = true;
             const emptyRequired = [];
             for (const key of REQUIRED_FIELDS) {
                 if (key === 'DEG') continue; // optional at extract; force_22h handled in payload
+                const m = /^(TBS?)(\d+)$/.exec(key);
+                if (m && miSkipped.has(String(parseInt(m[2], 10)))) continue;
                 const info = response.data[key];
                 if (!info || info.value === undefined || info.value === '' || info.value === null) {
                     isDataValid = false;
