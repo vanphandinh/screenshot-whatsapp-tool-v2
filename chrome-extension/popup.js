@@ -43,11 +43,11 @@ const logs = [];
 
 // ─── Test Scenarios: mock data for each caption case ───
 // TB values: >0 = active, <=0 = inactive
-// Luật tính phía server (không còn F/M scrape):
-//   m_eff = số TB ≤0 có TBS ∈ {Service mode, HMI stop}  → "đang bảo trì"
-//   f_eff = số TB ≤0 có TBS ∈ {Fault stop}              → "bị lỗi"
-//   TB ≤0 còn lại → low_wind; AWS ≥ 6 → fold low_wind vào active
-// Điều kiện hiển thị "gió thấp": low_wind > 0 AND AWS < 6
+// Luật tính phía server (không còn F/M scrape, không còn fold AWS>=6):
+//   m_eff = số TB ≤0 có TBS ∈ {Service mode, HMI stop, Maintenance} → "đang bảo trì"
+//   f_eff = số TB ≤0 có TBS ∈ {Fault stop, Fault character}          → "bị lỗi"
+//   low_wind = số TB ≤0 có TBS chứa 'No enough wind'                 → "gió thấp"
+//   active = DC - (m_eff + f_eff + low_wind); low_wind luôn hiện khi > 0
 function withTbs(scenario, overrides = {}) {
     const out = { ...scenario };
     for (let i = 1; i <= 12; i++) {
@@ -58,7 +58,7 @@ function withTbs(scenario, overrides = {}) {
         }
         if (out[tbsKey] !== undefined) continue;
         const tb = parseFloat(String(out[`TB${i}`] ?? '').replace(',', '.'));
-        out[tbsKey] = (Number.isFinite(tb) && tb > 0) ? 'Power Production' : 'Warning Character Code';
+        out[tbsKey] = (Number.isFinite(tb) && tb > 0) ? 'Power Production' : 'No enough wind';
     }
     return out;
 }
@@ -68,9 +68,9 @@ const TEST_SCENARIOS = {
     normal: withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: false }),
     // All active + 22h report
     '22h': withTbs({ DC: '12', AWS: '5.3', TAP: '18.5', DEG: '125.8', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '1.4', force_22h: true }),
-    // Low wind only: 3 TB inactive (TB10,11,12<=0, TBS thường) → low_wind=3, AWS<6 → hiện "gió thấp"
+    // Low wind only: 3 TB inactive (TB10,11,12<=0, TBS 'No enough wind') → low_wind=3, active=9
     low_wind: withTbs({ DC: '12', AWS: '2.1', TAP: '13.5', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Wind high AWS: 3 TB ≤0 (TBS thường) → low_wind=3 nhưng AWS≥6 → fold vào active (active=12)
+    // Wind high AWS: 3 TB ≤0 ('No enough wind') → low_wind=3, active=9 (không fold kể cả AWS≥6)
     wind_high_aws: withTbs({ DC: '12', AWS: '7.5', TAP: '13.5', DEG: '95.2', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
     // Maintenance only: TB11 Service mode + TB12 HMI stop (≤0) → m_eff=2, low_wind=0
     maintenance: withTbs({ DC: '12', AWS: '5.3', TAP: '15.0', DEG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
@@ -86,6 +86,10 @@ const TEST_SCENARIOS = {
     all_no22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS7: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
     // All conditions + 22h report
     all_22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', DEG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }, { TBS7: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
+    // Strict-12 low wind: 12 TB<=0 + 'No enough wind' → 0/12/0/0 → caption rút gọn
+    all_low_wind: withTbs({ DC: '12', AWS: '1.9', TAP: '0', DEG: '70.0', TB1: '0', TB2: '0', TB3: '0', TB4: '0', TB5: '0', TB6: '0', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
+    // Strict-12 low wind + 22h: caption rút gọn + DEG
+    all_low_wind_22h: withTbs({ DC: '12', AWS: '1.9', TAP: '0', DEG: '70.0', TB1: '0', TB2: '0', TB3: '0', TB4: '0', TB5: '0', TB6: '0', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }),
 };
 
 // ─── Init ───

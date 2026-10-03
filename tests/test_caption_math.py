@@ -1,9 +1,10 @@
 """Unit tests for caption count math + manual intervention (no Flask/WA needed).
 
-Luật mới (không còn scraped F/M):
-  m_eff = số TB có công suất <= 0 và TBS ∈ {service mode, hmi stop}
-  f_eff = số TB có công suất <= 0 và TBS ∈ {fault stop}
-  còn lại (TB <= 0) → low_wind; AWS >= 6 → fold low_wind vào active
+Luật mới (không còn scraped F/M, không còn fold AWS>=6):
+  m_eff = số TB có công suất <= 0 và TBS ∈ {service mode, hmi stop, maintenance}
+  f_eff = số TB có công suất <= 0 và TBS ∈ {fault stop, fault character}
+  low_wind = số TB có công suất <= 0 và TBS chứa 'no enough wind'
+  active = DC - (m_eff + f_eff + low_wind)
 """
 import os
 import sys
@@ -60,7 +61,7 @@ def test_parse_mi_rejects_non_digit_keys():
 
 def test_baseline_all_active():
     r = compute_caption_counts(
-        _tb_all_active(), _tbs_prod(), dc_num=12, aws_num=5.3,
+        _tb_all_active(), _tbs_prod(), dc_num=12,
     )
     assert r["active"] == 12
     assert r["f_eff"] == 0
@@ -75,7 +76,7 @@ def test_maint_counted_from_service_mode_and_hmi_stop():
     tbs = _tbs_prod()
     tbs[10] = "Service mode"
     tbs[11] = "HMI stop"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=5.3)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["m_eff"] == 2
     assert r["f_eff"] == 0
     assert r["low_wind"] == 0
@@ -87,7 +88,7 @@ def test_tbs_matching_ignores_case_whitespace_and_nbsp():
     tb = _tb_all_active()
     tb[9] = tb[10] = tb[11] = 0.0
     tbs = ["Power Production"] * 9 + ["Service\u00a0Mode", "HMI  stop", "FAULT\u00a0STOP"]
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=5.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["m_eff"] == 2
     assert r["f_eff"] == 1
     assert r["low_wind"] == 0
@@ -102,7 +103,7 @@ def test_fault_stop_counted_as_error():
     tbs = _tbs_prod()
     tbs[9] = "Fault stop"
     tbs[11] = "Fault Stop"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=5.3)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 2
     assert r["m_eff"] == 0
     assert r["low_wind"] == 0
@@ -114,13 +115,13 @@ def test_maint_fault_and_low_wind_combined():
     tb = [1.5] * 7 + [0.0] * 5
     tbs = ["Power Production"] * 7 + [
         "Service mode", "HMI stop", "Fault stop",
-        "Warning Character Code", "Warning Character Code",
+        "No enough wind", "No enough wind",
     ]
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.1)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["m_eff"] == 2
     assert r["f_eff"] == 1
     assert r["low_wind"] == 2
-    assert r["active"] == 7  # AWS < 6 → không fold
+    assert r["active"] == 7  # 12 - (2+1+2), không còn fold AWS
 
 
 def test_positive_power_not_counted_even_with_status_match():
@@ -129,7 +130,7 @@ def test_positive_power_not_counted_even_with_status_match():
     tb[9] = 0.4    # > 0 + TBS Service mode → vẫn active, không vào M
     tb[10] = -0.2  # công suất âm + Fault stop → F
     tbs = ["Power Production"] * 9 + ["Service mode", "Fault stop", "Power Production"]
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=5.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["m_eff"] == 0
     assert r["f_eff"] == 1
     assert r["low_wind"] == 0
@@ -142,40 +143,55 @@ def test_zero_power_counts_as_inactive():
     tb[11] = 0.0
     tbs = _tbs_prod()
     tbs[11] = "Fault stop"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=5.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 1
     assert r["active"] == 11
 
 
-# ─── Low wind + AWS fold (giữ nguyên) ───
+# ─── Low wind explicit + không còn AWS fold ───
 
-def test_baseline_low_wind_and_aws_fold():
+def test_baseline_low_wind_explicit_no_fold():
+    """low_wind chỉ đếm khi TBS chứa 'no enough wind'; AWS cao không fold."""
+    tb = _tb_all_active()
+    tb[9] = tb[10] = tb[11] = 0.0
+    tbs = _tbs_prod()
+    for i in (9, 10, 11):
+        tbs[i] = "No enough wind"
+    r_low = compute_caption_counts(tb, tbs, 12)
+    assert r_low["active"] == 9
+    assert r_low["low_wind"] == 3
+
+    r_hi = compute_caption_counts(tb, tbs, 12)
+    assert r_hi["low_wind"] == 3
+    assert r_hi["active"] == 9  # không fold kể cả AWS>=6
+
+
+def test_unknown_tbs_not_counted_as_low_wind():
+    """TB<=0 với TBS lạ (Warning...) không thuộc nhóm nào → không trừ vào active."""
     tb = _tb_all_active()
     tb[9] = tb[10] = tb[11] = 0.0
     tbs = _tbs_prod()
     for i in (9, 10, 11):
         tbs[i] = "Warning Character Code"
-    r_low = compute_caption_counts(tb, tbs, 12, 2.1)
-    assert r_low["active"] == 9
-    assert r_low["low_wind"] == 3
-
-    r_hi = compute_caption_counts(tb, tbs, 12, 7.5)
-    assert r_hi["low_wind"] == 3
-    assert r_hi["active"] == 12
+    r = compute_caption_counts(tb, tbs, 12)
+    assert r["low_wind"] == 0
+    assert r["m_eff"] == 0
+    assert r["f_eff"] == 0
+    assert r["active"] == 12
 
 
 def test_dc_below_inactive_rejects():
     """DC nhỏ hơn số TB dừng → active âm → từ chối (INCONSISTENT_COUNTS)."""
     tb = [0.0] * 10 + [1.5, 1.5]
-    tbs = ["Warning Character Code"] * 12
+    tbs = ["No enough wind"] * 12
     with pytest.raises(CaptionMathError) as ei:
-        compute_caption_counts(tb, tbs, dc_num=9, aws_num=5.0)
+        compute_caption_counts(tb, tbs, dc_num=9)
     assert ei.value.error_code == "INCONSISTENT_COUNTS"
 
 
 def test_invalid_lengths_reject():
     with pytest.raises(CaptionMathError) as ei:
-        compute_caption_counts([1.5] * 11, _tbs_prod(11), dc_num=12, aws_num=5.0)
+        compute_caption_counts([1.5] * 11, _tbs_prod(11), dc_num=12)
     assert ei.value.error_code == "INVALID_FIELD"
 
 
@@ -183,7 +199,7 @@ def test_invalid_lengths_reject():
 
 def test_mi_phase2_adds_error_on_top_of_phase1():
     r = compute_caption_counts(
-        _tb_all_active(), _tbs_prod(), dc_num=12, aws_num=5.3,
+        _tb_all_active(), _tbs_prod(), dc_num=12,
         mi_enabled=True, turbines={12: "error"},
     )
     assert r["phase1"]["active"] == 11
@@ -199,7 +215,7 @@ def test_mi_phase1_classifies_fault_stop_as_error():
     tbs = ["Power Production"] * 10 + ["Fault stop", "Service mode"]
     # Override TB12 (đang Service mode) thành normal → phase1 chỉ còn TB11
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=5.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={12: "normal"},
     )
     assert r["phase1"]["f"] == 1
@@ -216,7 +232,7 @@ def test_mi_override_fault_tb_to_maintenance():
     tbs = _tbs_prod()
     tbs[11] = "Fault stop"
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=5.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={12: "maintenance"},
     )
     assert r["phase1"]["f"] == 0  # TB12 bị override → không còn trong phase1
@@ -232,7 +248,7 @@ def test_mi_no_double_count_error():
     tb[10] = tb[11] = 0.0
     tbs = ["Power Production"] * 10 + ["Fault stop", "Fault stop"]
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=2.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={12: "error"},
     )
     # Phase1: TB11 fault → f_1=1; phase2: TB12 override error +1 (không đếm lại TB11)
@@ -245,7 +261,7 @@ def test_mi_no_double_count_error():
 def test_mi_respects_dc():
     """DC=10 with all TB>0; override TB12 normal → active 10 not 12."""
     r = compute_caption_counts(
-        _tb_all_active(), _tbs_prod(), dc_num=10, aws_num=5.0,
+        _tb_all_active(), _tbs_prod(), dc_num=10,
         mi_enabled=True, turbines={12: "normal"},
     )
     assert r["phase1"]["dc_1"] == 9
@@ -259,7 +275,7 @@ def test_mi_maintenance_and_normal_override():
     tbs = _tbs_prod()
     tbs[8] = "Warning Character Code"
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=5.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={9: "normal", 10: "maintenance"},
     )
     assert r["phase1"]["non_count"] == 10
@@ -274,43 +290,43 @@ def test_mi_override_error_tb_to_normal():
     tbs = _tbs_prod()
     tbs[11] = "Fault stop"
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=5.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={12: "normal"},
     )
     assert r["f_eff"] == 0
     assert r["active"] == 12
 
 
-def test_mi_low_wind_override_not_folded_when_aws_high():
-    """Override low_wind must stay in caption counts; AWS>=6 must not add it to active."""
+def test_mi_low_wind_override_kept_when_aws_high():
+    """Override low_wind luôn giữ trong counts; AWS>=6 không fold gì cả."""
     r = compute_caption_counts(
-        _tb_all_active(), _tbs_prod(), 12, 7.0,
+        _tb_all_active(), _tbs_prod(), 12,
         mi_enabled=True, turbines={12: "low_wind"},
     )
     assert r["low_wind"] == 1
     assert r["active"] == 11  # 11 phase1 active; do not fold override
 
 
-def test_mi_scrape_low_wind_still_folded_when_aws_high():
-    """Phase1 scrape low_wind still folds into active when AWS>=6; override low_wind does not."""
+def test_mi_scrape_low_wind_not_folded_when_aws_high():
+    """Phase1 scrape low_wind không fold khi AWS>=6; cộng dồn với override."""
     tb = _tb_all_active()
     tb[10] = 0.0  # TB11 scrape inactive → low_wind in phase1
     tbs = _tbs_prod()
-    tbs[10] = "Warning Character Code"
+    tbs[10] = "No enough wind"
     r = compute_caption_counts(
-        tb, tbs, 12, 7.0,
+        tb, tbs, 12,
         mi_enabled=True, turbines={12: "low_wind"},
     )
     assert r["phase1"]["low_wind"] == 1
     assert r["phase2"]["low_wind"] == 1
-    assert r["low_wind"] == 1  # only override remains for caption after fold
-    assert r["active"] == 11  # dc_1=11, inactive_1=1 → active_1=10, +fold 1 → 11, +0 normal
+    assert r["low_wind"] == 2  # phase1 + override, không fold
+    assert r["active"] == 10  # dc_1=11, dừng_1=1 → active_1=10, +0 normal
 
 
 def test_mi_all_overridden():
     turbines = {i: "error" for i in range(1, 13)}
     r = compute_caption_counts(
-        _tb_all_active(), _tbs_prod(), 12, 5.0,
+        _tb_all_active(), _tbs_prod(), 12,
         mi_enabled=True, turbines=turbines,
     )
     assert r["phase1"]["active"] == 0
@@ -322,19 +338,19 @@ def test_mi_enabled_empty_turbines_uses_legacy():
     tb = _tb_all_active()
     tb[10] = tb[11] = 0.0
     tbs = _tbs_prod()
-    tbs[10] = tbs[11] = "Warning Character Code"
-    base = compute_caption_counts(tb, tbs, 12, 2.0, mi_enabled=False)
-    mi = compute_caption_counts(tb, tbs, 12, 2.0, mi_enabled=True, turbines={})
+    tbs[10] = tbs[11] = "No enough wind"
+    base = compute_caption_counts(tb, tbs, 12, mi_enabled=False)
+    mi = compute_caption_counts(tb, tbs, 12, mi_enabled=True, turbines={})
     assert mi == base
 
 
 def test_mi_rejects_when_phase1_active_negative():
     """DC nhỏ hơn số TB dừng trong phase1 → active âm → từ chối."""
     tb = [0.0] * 4 + [1.5] * 8
-    tbs = ["Warning Character Code"] * 12
+    tbs = ["No enough wind"] * 12
     with pytest.raises(CaptionMathError) as ei:
         compute_caption_counts(
-            tb, tbs, dc_num=3, aws_num=5.0,
+            tb, tbs, dc_num=3,
             mi_enabled=True, turbines={12: "normal"},
         )
     assert ei.value.error_code == "INCONSISTENT_COUNTS"
@@ -348,7 +364,7 @@ def test_phrase_include_fault_suffix():
     tb[11] = 0.0
     tbs = _tbs_prod()
     tbs[11] = "Fault Stop - Gearbox"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 1
     assert r["m_eff"] == 0
     assert r["low_wind"] == 0
@@ -362,20 +378,20 @@ def test_phrase_include_maint_suffix():
     tbs = _tbs_prod()
     tbs[10] = "HMI Stop (manual)"
     tbs[11] = "Service Mode - Test"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["m_eff"] == 2
     assert r["f_eff"] == 0
     assert r["low_wind"] == 0
     assert r["active"] == 10
 
 
-def test_phrase_include_does_not_confuse_warning_with_fault():
-    """'Warning Character Code' không dính cụm 'fault character' → low_wind."""
+def test_phrase_include_no_enough_wind_suffix():
+    """TBS hậu tố 'No enough wind ...' vẫn đếm low_wind."""
     tb = _tb_all_active()
     tb[11] = 0.0
     tbs = _tbs_prod()
-    tbs[11] = "Warning Character Code"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    tbs[11] = "No enough wind - waiting"
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 0
     assert r["m_eff"] == 0
     assert r["low_wind"] == 1
@@ -389,10 +405,11 @@ def test_phrase_include_word_alone_not_enough():
     tbs = _tbs_prod()
     tbs[10] = "Stopped by wind"
     tbs[11] = "Character test"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 0
     assert r["m_eff"] == 0
-    assert r["low_wind"] == 2
+    assert r["low_wind"] == 0
+    assert r["active"] == 12
 
 
 def test_phrase_include_fault_first_on_both():
@@ -401,7 +418,7 @@ def test_phrase_include_fault_first_on_both():
     tb[11] = 0.0
     tbs = _tbs_prod()
     tbs[11] = "Fault stop + Service mode"
-    r = compute_caption_counts(tb, tbs, dc_num=12, aws_num=2.0)
+    r = compute_caption_counts(tb, tbs, dc_num=12)
     assert r["f_eff"] == 1
     assert r["m_eff"] == 0
     assert r["low_wind"] == 0
@@ -416,7 +433,7 @@ def test_phrase_include_mi_phase1_with_suffix():
     tbs[10] = "Fault Stop - Gearbox"
     tbs[11] = "Service mode"
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=2.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={12: "normal"},
     )
     assert r["phase1"]["f"] == 1
@@ -424,3 +441,64 @@ def test_phrase_include_mi_phase1_with_suffix():
     assert r["f_eff"] == 1
     assert r["m_eff"] == 0
     assert r["active"] == 11
+
+
+def test_mi_all_overridden_low_wind():
+    """Override cả 12 TB low_wind → 0/12/0/0, đủ điều kiện strict-12 rút gọn."""
+    turbines = {i: "low_wind" for i in range(1, 13)}
+    r = compute_caption_counts(
+        _tb_all_active(), _tbs_prod(), 12,
+        mi_enabled=True, turbines=turbines,
+    )
+    assert r["phase1"]["active"] == 0
+    assert r["phase1"]["low_wind"] == 0
+    assert r["phase2"]["low_wind"] == 12
+    assert r["low_wind"] == 12
+    assert r["m_eff"] == 0
+    assert r["f_eff"] == 0
+    assert r["active"] == 0
+
+
+def test_mi_phase1_ignores_unknown_tbs():
+    """TB không override, TB<=0 với TBS lạ → None, không trừ vào active."""
+    tb = _tb_all_active()
+    tb[5] = 0.0  # TB6 scrape dừng nhưng TBS không thuộc nhóm nào
+    tbs = _tbs_prod()
+    tbs[5] = "Warning Character Code"
+    r = compute_caption_counts(
+        tb, tbs, dc_num=12,
+        mi_enabled=True, turbines={12: "normal"},
+    )
+    assert r["phase1"]["low_wind"] == 0
+    assert r["phase1"]["m"] == 0
+    assert r["phase1"]["f"] == 0
+    assert r["low_wind"] == 0
+    assert r["m_eff"] == 0
+    assert r["f_eff"] == 0
+    assert r["active"] == 12
+
+
+def test_maint_maintenance_phrase():
+    """TBS chứa cụm 'maintenance' → đếm vào M (bảo trì)."""
+    tb = _tb_all_active()
+    tb[11] = 0.0
+    tbs = _tbs_prod()
+    tbs[11] = "Turbine under maintenance"
+    r = compute_caption_counts(tb, tbs, dc_num=12)
+    assert r["m_eff"] == 1
+    assert r["f_eff"] == 0
+    assert r["low_wind"] == 0
+    assert r["active"] == 11
+
+
+def test_parse_mi_rejects_bad_shape():
+    """raw/turbines sai kiểu và key ngoài 1..12 → INVALID_MANUAL_INTERVENTION."""
+    for raw in (
+        "not-an-object",
+        {"enabled": True, "turbines": ["error"]},
+        {"enabled": True, "turbines": {"0": "error"}},
+        {"enabled": True, "turbines": {"13": "low_wind"}},
+    ):
+        with pytest.raises(CaptionMathError) as ei:
+            parse_manual_intervention(raw)
+        assert ei.value.error_code == "INVALID_MANUAL_INTERVENTION"

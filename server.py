@@ -1041,7 +1041,7 @@ def capture():
 
         try:
             counts = compute_caption_counts(
-                tb_values, tbs_raw, dc_num, aws_num,
+                tb_values, tbs_raw, dc_num,
                 mi_enabled=mi_enabled, turbines=mi_turbines,
             )
         except CaptionMathError as e:
@@ -1100,7 +1100,6 @@ def capture():
                 tap_num=tap_num,
                 deg_display=deg_display,
                 force_22h=force_22h,
-                mi_enabled=mi_enabled,
             )
             # Display values for response payload (keep same formatting as caption)
             aws_display = f"{aws_num:.1f}".rstrip('0').rstrip('.')

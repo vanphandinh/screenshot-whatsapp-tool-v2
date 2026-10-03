@@ -84,8 +84,8 @@
                         <option value="22h">🌙 Tất cả HĐ + báo cáo 22h</option>
                     </optgroup>
                     <optgroup label="── Một điều kiện ──">
-                        <option value="low_wind">💨 Gió thấp (AWS&lt;6)</option>
-                        <option value="wind_high_aws">💨 TB ≤0 + AWS≥6 (reset tạm → vẫn hoạt động)</option>
+                        <option value="low_wind">💨 Gió thấp (No enough wind)</option>
+                        <option value="wind_high_aws">💨 Gió thấp + AWS cao (vẫn hiện gió thấp)</option>
                         <option value="maintenance">🔧 Bảo trì (Service mode/HMI stop)</option>
                         <option value="error">⚠️ Lỗi (Fault stop)</option>
                     </optgroup>
@@ -97,6 +97,8 @@
                     <optgroup label="── Đầy đủ ──">
                         <option value="all_no22h">🔥 Tất cả điều kiện</option>
                         <option value="all_22h">🔥🌙 Tất cả + 22h</option>
+                        <option value="all_low_wind">💨💨 Cả 12 TB gió thấp (rút gọn)</option>
+                        <option value="all_low_wind_22h">💨💨🌙 12 TB gió thấp + 22h</option>
                     </optgroup>
                 </select>
                 <button class="btn btn-primary btn-sm" id="btnTest">

@@ -1,14 +1,18 @@
 """Caption count math + manual intervention parsing (no Flask deps).
 
-M (bảo trì) và F (lỗi) được suy ra trực tiếp từ dữ liệu scrape:
+M (bảo trì), F (lỗi) và low_wind (gió thấp) được suy ra trực tiếp từ dữ liệu scrape:
   M = số TB có công suất <= 0 và TBS chứa cụm {service mode, hmi stop, maintenance}
   F = số TB có công suất <= 0 và TBS chứa cụm {fault stop, fault character}
+  low_wind = số TB có công suất <= 0 và TBS chứa cụm {no enough wind}
+  active = DC - (M + F + low_wind)
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
+Không còn ngoại lệ AWS >= 6 (đã bỏ 2026-10).
 """
 from typing import Optional
 
 MAINT_TBS = ("service mode", "hmi stop", "maintenance")
 FAULT_TBS = ("fault stop", "fault character")
+LOW_WIND_TBS = ("no enough wind",)
 MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
 
 # Caption formatting helpers (pure, no Flask deps)
@@ -38,6 +42,11 @@ def _is_fault_tbs(norm: str) -> bool:
 def _is_maint_tbs(norm: str) -> bool:
     """True nếu chuỗi TBS đã chuẩn hóa chứa một cụm bảo trì (include theo cụm)."""
     return any(p in norm for p in MAINT_TBS)
+
+
+def _is_low_wind_tbs(norm: str) -> bool:
+    """True nếu chuỗi TBS đã chuẩn hóa chứa cụm gió thấp (include theo cụm)."""
+    return any(p in norm for p in LOW_WIND_TBS)
 
 
 def parse_manual_intervention(raw):
@@ -114,19 +123,33 @@ def _count_fault(tb_values, tbs_raw):
     )
 
 
-def _legacy_counts(tb_values, tbs_raw, dc_num, aws_num):
-    """Caption math: M/F suy ra từ TBS + công suất âm (không còn scraped F/M)."""
-    inactive_tb_count = sum(1 for tb in tb_values if tb <= 0)
+def _count_low_wind(tb_values, tbs_raw):
+    """low_wind = các TB có công suất <= 0 và TBS chứa cụm gió thấp (no enough wind)."""
+    count = 0
+    for tb, tbs in zip(tb_values, tbs_raw):
+        if tb > 0:
+            continue
+        norm = _norm_tbs(tbs)
+        # Fault-first rồi maint (giữ thứ tự check cũ); chuỗi chứa cụm lỗi/bảo trì
+        # được tính vào nhóm đó trước, không tính trùng vào low_wind
+        if _is_fault_tbs(norm):
+            continue
+        if _is_maint_tbs(norm):
+            continue
+        if _is_low_wind_tbs(norm):
+            count += 1
+    return count
+
+
+def _legacy_counts(tb_values, tbs_raw, dc_num):
+    """Caption math: M/F/low_wind suy ra từ TBS + công suất (không còn scraped F/M)."""
     m_eff = _count_maintenance(tb_values, tbs_raw)
     f_eff = _count_fault(tb_values, tbs_raw)
-    # m_eff + f_eff luôn <= inactive vì đếm trên các tập TB rời nhau
-    low_wind = inactive_tb_count - m_eff - f_eff
-    active = dc_num - inactive_tb_count
-    if low_wind > 0 and aws_num >= 6:
-        active += low_wind
+    low_wind = _count_low_wind(tb_values, tbs_raw)
+    active = dc_num - (m_eff + f_eff + low_wind)
     if active < 0:
         raise CaptionMathError(
-            f"Inconsistent counts: active={active} (DC={dc_num}, inactive={inactive_tb_count})",
+            f"Inconsistent counts: active={active} (DC={dc_num}, m={m_eff}, f={f_eff}, low={low_wind})",
             error_code="INCONSISTENT_COUNTS",
         )
     return {
@@ -144,7 +167,8 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
       TB > 0                                          → normal
       TB <= 0 & TBS chứa cụm FAULT_TBS (check trước)  → error
       TB <= 0 & TBS chứa cụm MAINT_TBS                → maintenance
-      else (TB <= 0, other TBS)                       → low_wind
+      TB <= 0 & TBS chứa cụm LOW_WIND_TBS             → low_wind
+      else (TB <= 0, TBS lạ/không khớp nhóm nào)      → None (không trừ vào active)
     Returns statuses[12]. Entries outside only_indices are None.
     """
     only_indices = set(only_indices)
@@ -158,8 +182,10 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
             statuses[i] = "error"
         elif _is_maint_tbs(norm):
             statuses[i] = "maintenance"
-        else:
+        elif _is_low_wind_tbs(norm):
             statuses[i] = "low_wind"
+        else:
+            statuses[i] = None
     return statuses
 
 
@@ -186,7 +212,6 @@ def build_caption(
     tap_num: float,
     deg_display: Optional[str] = None,
     force_22h: bool = False,
-    mi_enabled: bool = False,
 ) -> str:
     """
     Build WhatsApp caption. Pure function — easy to unit-test.
@@ -207,8 +232,8 @@ def build_caption(
     aws_display = _format_one_decimal(aws_num)
     tap_display = _format_one_decimal(tap_num)
 
-    # MI: low_wind đã loại phần fold, luôn hiện nếu >0; legacy: ẩn khi AWS >=6
-    show_low_wind = (low_wind > 0) if mi_enabled else (low_wind > 0 and float(aws_num) < 6)
+    # low_wind luôn hiện khi > 0 (đã bỏ ngoại lệ AWS >= 6 từ 2026-10).
+    show_low_wind = low_wind > 0
 
     if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
         # Rút gọn: chỉ giữ số liệu TB, bỏ gió/công suất
@@ -232,18 +257,19 @@ def build_caption(
     return caption
 
 
-def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False, turbines=None):
+def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbines=None):
     """
     Compute active / m_eff / f_eff / low_wind for WhatsApp caption.
 
     m_eff = TBs with power <= 0 and TBS chứa cụm MAINT_TBS (service mode / hmi stop)
     f_eff = TBs with power <= 0 and TBS chứa cụm FAULT_TBS (fault stop / fault character)
+    low_wind = TBs with power <= 0 and TBS chứa cụm LOW_WIND_TBS (no enough wind)
+    active = DC - (m_eff + f_eff + low_wind)
 
     When mi_enabled is False or turbines empty: full-farm math.
     When mi_enabled with overrides:
       phase1 — TBS-based classification on non-intervened TBs only (DC-aware)
-      phase2 — add override status counts
-      AWS>=6 — fold only phase1 (scrape) low_wind into active; never fold override low_wind
+      phase2 — add override status counts (no AWS fold)
     """
     if len(tb_values) != 12 or len(tbs_raw) != 12:
         raise CaptionMathError(
@@ -253,7 +279,7 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False
     turbines = turbines or {}
 
     if not mi_enabled or not turbines:
-        return _legacy_counts(tb_values, tbs_raw, dc_num, aws_num)
+        return _legacy_counts(tb_values, tbs_raw, dc_num)
 
     overridden = set(turbines.keys())
     non = [i for i in range(1, 13) if i not in overridden]
@@ -288,13 +314,7 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, aws_num, mi_enabled=False
     active = active_1 + n_normal
     m_eff = m_1 + n_maint
     f_eff = f_1 + n_error
-
-    # AWS>=6: fold only scrape (phase1) low_wind into active — never fold override low_wind
-    if low_wind_1 > 0 and aws_num >= 6:
-        active += low_wind_1
-        low_wind = n_low
-    else:
-        low_wind = low_wind_1 + n_low
+    low_wind = low_wind_1 + n_low
 
     if active < 0:
         raise CaptionMathError(

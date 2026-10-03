@@ -26,7 +26,7 @@ def test_mi_dummy_scrape_ignored():
     tbs_real = _tbs_prod()
     tbs_real[11] = "Fault stop"
     r_real = compute_caption_counts(
-        tb_real, tbs_real, dc_num=12, aws_num=5.0,
+        tb_real, tbs_real, dc_num=12,
         mi_enabled=True, turbines={12: "error"},
     )
     # server thay scrape TB12 bằng dummy 0.0 / ""
@@ -35,7 +35,7 @@ def test_mi_dummy_scrape_ignored():
     tbs_dummy = _tbs_prod()
     tbs_dummy[11] = ""
     r_dummy = compute_caption_counts(
-        tb_dummy, tbs_dummy, dc_num=12, aws_num=5.0,
+        tb_dummy, tbs_dummy, dc_num=12,
         mi_enabled=True, turbines={12: "error"},
     )
     assert r_dummy["active"] == r_real["active"] == 11
@@ -51,7 +51,7 @@ def test_mi_dummy_invalid_number_ignored():
     tbs = _tbs_prod()
     tbs[2] = "Fault stop"
     r = compute_caption_counts(
-        tb, tbs, dc_num=12, aws_num=5.0,
+        tb, tbs, dc_num=12,
         mi_enabled=True, turbines={3: "normal"},
     )
     assert r["f_eff"] == 0  # không lọt error từ scrape TB3
