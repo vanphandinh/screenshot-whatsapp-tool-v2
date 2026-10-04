@@ -1033,11 +1033,16 @@ function normalizeScrapedNumber(value, fieldName) {
         return s;
     }
     // Dashboard placeholders → missing (validation fails) instead of inventing values
-    if (/^(—|–|-|−|n\/?a|null|none|\.|…)$/i.test(s)) {
+    if (/^(n\/?a|null|none|\.|…)$/i.test(s)) {
         return '';
     }
     // Keep digits, separators, minus; drop unit letters/spaces like "MW", "m/s"
     const cleaned = s.replace(/[^\d,.\-]/g, '');
+    // Công suất không đọc được ('--', '- -', '—', kể cả kèm đơn vị) -> missing;
+    // server tính lost_signal khi TBS là 'Front-end interruption'
+    if (/^-+$/.test(cleaned)) {
+        return '';
+    }
     return cleaned || s;
 }
 

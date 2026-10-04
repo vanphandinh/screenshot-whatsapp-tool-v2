@@ -329,6 +329,15 @@ def require_api_token():
         return False, (jsonify({"success": False, "error": "Unauthorized: invalid or missing X-API-Token"}), 401)
     return True, None
 
+_PLACEHOLDER_POWER_RE = re.compile(r'^[\s\u2010-\u2015\u2212-]+$')
+
+
+def is_unreadable_power(raw) -> bool:
+    """Dash-only power placeholder ('--', '- -', '—') không phải số; coi như không đọc được."""
+    s = str(raw if raw is not None else '').strip()
+    return bool(s) and _PLACEHOLDER_POWER_RE.fullmatch(s) is not None
+
+
 def parse_number(v):
     """Parse scraped numeric strings (units, thousand separators, decimal comma/dot)."""
     raw = str(v).strip().replace('\u2212', '-').replace('\u2013', '-').replace('\u2014', '-')
@@ -981,7 +990,8 @@ def capture():
         if force_22h and not dpg:
             missing.append("DPG")
         for idx, (name, val) in enumerate(zip(tb_names, tb_raw), start=1):
-            if val or idx in overridden:
+            # '--' (công suất không đọc được) coi như không có giá trị
+            if (val and not is_unreadable_power(val)) or idx in overridden:
                 continue
             if is_lost_signal_tbs(tbs_raw[idx - 1]):
                 continue
@@ -1004,8 +1014,8 @@ def capture():
             if idx in overridden:
                 tb_values.append(0.0)  # dummy, ignored by compute_caption_counts phase1
                 continue
-            if not raw:
-                # Hợp lệ: TB không đọc được công suất + TBS 'front-end interruption'
+            if not raw or is_unreadable_power(raw):
+                # Hợp lệ: TB không đọc được công suất ('--' hoặc trống) + TBS 'front-end interruption'
                 # → mất tín hiệu (None), đã validate ở bước missing phía trên
                 tb_values.append(None)
                 continue
