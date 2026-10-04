@@ -31,6 +31,7 @@ from caption_math import (
     build_caption,
     compute_caption_counts,
     is_all_low_wind,
+    is_lost_signal_tbs,
     parse_manual_intervention,
 )
 
@@ -971,6 +972,7 @@ def capture():
         # DPG only required for 22h/DPG report; hourly runs must not fail on empty DPG
         # F/M no longer accepted from the extension — derived server-side from TBS + power
         # MI: TB/TBS scrape của turbine đã can thiệp được bỏ qua (missing + invalid)
+        # TB không đọc được công suất chỉ hợp lệ khi TBS là 'front-end interruption' (mất tín hiệu)
         overridden = set(mi_turbines.keys()) if mi_enabled else set()
         missing = []
         for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap)]:
@@ -979,8 +981,11 @@ def capture():
         if force_22h and not dpg:
             missing.append("DPG")
         for idx, (name, val) in enumerate(zip(tb_names, tb_raw), start=1):
-            if not val and idx not in overridden:
-                missing.append(name)
+            if val or idx in overridden:
+                continue
+            if is_lost_signal_tbs(tbs_raw[idx - 1]):
+                continue
+            missing.append(name)
         for idx, (name, val) in enumerate(zip(tbs_names, tbs_raw), start=1):
             if not val and idx not in overridden:
                 missing.append(name)
@@ -998,6 +1003,11 @@ def capture():
         for idx, raw in enumerate(tb_raw, start=1):
             if idx in overridden:
                 tb_values.append(0.0)  # dummy, ignored by compute_caption_counts phase1
+                continue
+            if not raw:
+                # Hợp lệ: TB không đọc được công suất + TBS 'front-end interruption'
+                # → mất tín hiệu (None), đã validate ở bước missing phía trên
+                tb_values.append(None)
                 continue
             try:
                 tb_values.append(parse_number(raw))
@@ -1055,6 +1065,7 @@ def capture():
         f_eff = counts["f_eff"]
         active = counts["active"]
         low_wind = counts["low_wind"]
+        lost_signal = counts["lost_signal"]
 
         if mi_enabled:
             log(
@@ -1100,13 +1111,17 @@ def capture():
                 tap_num=tap_num,
                 dpg_display=dpg_display,
                 force_22h=force_22h,
+                lost_signal=lost_signal,
             )
             # Display values for response payload (keep same formatting as caption)
             aws_display = f"{aws_num:.1f}".rstrip('0').rstrip('.')
             tap_display = f"{tap_num:.1f}".rstrip('0').rstrip('.')
 
             log(f"Caption: {caption}", "SUCCESS")
-            if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
+            if is_all_low_wind(
+                active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff,
+                lost_signal=lost_signal,
+            ):
                 log("Caption rút gọn do 12 TB gió thấp (ẩn AWS/TAP) — áp dụng cho cả live/test", "INFO")
 
             msg_type_log = "TEST" if is_test else "LIVE"

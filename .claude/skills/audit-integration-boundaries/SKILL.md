@@ -20,7 +20,7 @@ Trong repo này, capture flow cắt qua extension → HTTP → screenshot → as
 
 ## Core comparisons
 
-1. **Payload ↔ validation** — keys DC, AWS, TAP, DPG, TB1–TB12, TBS1–TBS12 (KHÔNG còn F/M — server tự suy từ TBS + công suất) + flags `force_22h`/`is_test`/`capture_id`/`manual_intervention`; required vs optional (DPG chỉ bắt buộc khi `force_22h`)
+1. **Payload ↔ validation** — keys DC, AWS, TAP, DPG, TB1–TB12, TBS1–TBS12 (KHÔNG còn F/M — server tự suy từ TBS + công suất) + flags `force_22h`/`is_test`/`capture_id`/`manual_intervention`; required vs optional (DPG chỉ bắt buộc khi `force_22h`; TB{i} được phép trống khi TBS{i} là 'front-end interruption' — mất tín hiệu đường truyền, các TB khác vẫn bắt buộc)
 2. **Immediate vs async** — extension tin HTTP 200; `_send_whatsapp_image` fail im lặng? Kiểm tra dedupe `capture_id` + client poll `last_send_outcome` qua `/api/status`
 3. **Focus/status APIs** — query params / response JSON extension expect
 4. **Config** — `config.json.example` ↔ server load ↔ popup storage keys

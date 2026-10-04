@@ -36,7 +36,8 @@ const MI_STATUS_OPTIONS = [
     { value: 'normal', label: 'Bình thường' },
     { value: 'maintenance', label: 'Bảo trì' },
     { value: 'error', label: 'Lỗi' },
-    { value: 'low_wind', label: 'Gió thấp' }
+    { value: 'low_wind', label: 'Gió thấp' },
+    { value: 'lost_signal', label: 'Mất tín hiệu' }
 ];
 
 const logs = [];
@@ -47,7 +48,9 @@ const logs = [];
 //   m_eff = số TB ≤0 có TBS ∈ {Service mode, HMI stop, Maintenance} → "đang bảo trì"
 //   f_eff = số TB ≤0 có TBS ∈ {Fault stop, Fault character}          → "bị lỗi"
 //   low_wind = số TB ≤0 có TBS chứa 'No enough wind'                 → "gió thấp"
-//   active = DC - (m_eff + f_eff + low_wind); low_wind luôn hiện khi > 0
+//   lost_signal = số TB không đọc được công suất + TBS 'Front-end interruption' → "mất tín hiệu đường truyền"
+//   active = DC - (m_eff + f_eff + low_wind + lost_signal); low_wind luôn hiện khi > 0
+//   Thứ tự caption: đang hoạt động → lỗi → bảo trì → mất tín hiệu → gió thấp
 function withTbs(scenario, overrides = {}) {
     const out = { ...scenario };
     for (let i = 1; i <= 12; i++) {
@@ -76,6 +79,8 @@ const TEST_SCENARIOS = {
     maintenance: withTbs({ DC: '12', AWS: '5.3', TAP: '15.0', DPG: '110.5', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '0', TB12: '0', force_22h: false }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
     // Error only: TB12 Fault stop (≤0) → f_eff=1, low_wind=0
     error: withTbs({ DC: '12', AWS: '5.3', TAP: '16.5', DPG: '115.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '0', force_22h: false }, { TBS12: 'Fault stop' }),
+    // Lost signal only: TB12 không đọc được công suất + TBS 'Front-end interruption' → lost_signal=1, active=11
+    lost_signal: withTbs({ DC: '12', AWS: '5.3', TAP: '16.0', DPG: '112.0', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '1.6', TB9: '1.4', TB10: '1.5', TB11: '1.6', TB12: '', force_22h: false }, { TBS12: 'Front-end interruption' }),
     // Low wind + Maintenance: 5 inactive (TB8-12), TB11+TB12 bảo trì → m_eff=2, low_wind=3
     wind_maint: withTbs({ DC: '12', AWS: '2.1', TAP: '10.5', DPG: '80.4', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '1.5', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }, { TBS11: 'Service mode', TBS12: 'HMI stop' }),
     // Low wind + Error: 4 inactive (TB9-12), TB12 Fault stop → f_eff=1, low_wind=3

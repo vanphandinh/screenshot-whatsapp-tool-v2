@@ -1,7 +1,8 @@
 """Unit tests for build_caption + is_all_low_wind (pure, no Flask).
 
 Yêu cầu:
-- Đúng 12 TB gió thấp (strict 12): active==0 && low_wind==12 && m==0 && f==0 → rút gọn, ẩn gió/công suất
+- Đúng 12 TB gió thấp (strict 12): active==0 && low_wind==12 && m==0 && f==0 && lost_signal==0 → rút gọn, ẩn gió/công suất
+- Thứ tự đoạn caption: đang hoạt động → lỗi → bảo trì → mất tín hiệu → gió thấp (chi tiết: tests/test_lost_signal.py)
 - Giữ DPG (Daily Power Generation) cho 22h như cũ
 - Áp dụng cho cả is_test (caption logic không phân biệt, test ở đây đảm bảo build_caption không phụ thuộc is_test)
 """

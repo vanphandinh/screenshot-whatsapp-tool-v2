@@ -30,7 +30,7 @@ Bạn là chuyên gia review phía server của tool screenshot → WhatsApp (Fl
 - Flask routes: `/api/status`, `/api/focus`, `/api/capture` — validation, status codes, CORS
 - Win32 focus / `NativeWindowLock` / ClipCursor / TopMost / maximize — race với user input
 - Screenshot path, Pillow/pyautogui, cleanup `screenshots/`
-- Caption math (`caption_math.py`): M/F/low_wind suy từ TBS + công suất (service mode/hmi stop → M; fault stop → F; no enough wind → low_wind; KHÔNG còn F/M scrape, đã bỏ fold AWS≥6); DPG cho báo cáo 22h/23h (`parse_dpg_force22h`); caption rút gọn khi 12 TB gió thấp; `manual_intervention` overrides — edge cases (âm, missing, parse fail)
+- Caption math (`caption_math.py`): M/F/low_wind suy từ TBS + công suất (service mode/hmi stop → M; fault stop → F; no enough wind → low_wind; không đọc được công suất + front-end interruption → lost_signal/mất tín hiệu đường truyền; KHÔNG còn F/M scrape, đã bỏ fold AWS≥6); DPG cho báo cáo 22h/23h (`parse_dpg_force22h`); caption rút gọn khi 12 TB gió thấp; thứ tự caption HĐ → lỗi → bảo trì → mất tín hiệu → gió thấp; `manual_intervention` overrides — edge cases (âm, missing, parse fail)
 - WhatsApp: QR session, `_send_whatsapp_image` qua `_send_executor` (timeout + hard ceiling), dedupe `capture_id` (`_remember_capture`), `last_send_outcome` poll qua `/api/status`, logout/process kill
 - Tray (pystray), tkinter log loop, config load/save
 - Secrets: phone numbers in config, tokens/ session dirs

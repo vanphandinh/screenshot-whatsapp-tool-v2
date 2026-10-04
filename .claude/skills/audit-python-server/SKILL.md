@@ -36,7 +36,7 @@ Focus HWND sai, lock không release khi exception, maximize/TopMost ảnh hưở
 
 ### Caption math
 
-Logic trong `caption_math.py`: M/F/low_wind suy từ TBS + công suất TB (KHÔNG còn F/M scrape; đã bỏ ngoại lệ AWS≥6); DPG (`parse_dpg_force22h`, chỉ bắt buộc khi `force_22h`); caption rút gọn khi 12 TB gió thấp; `manual_intervention` overrides. Edge: thiếu key, parse fail, số âm, báo cáo 22h/23h.
+Logic trong `caption_math.py`: M/F/low_wind suy từ TBS + công suất TB (KHÔNG còn F/M scrape; đã bỏ ngoại lệ AWS≥6); TB không đọc được công suất + TBS 'front-end interruption' → `lost_signal` (mất tín hiệu đường truyền; chỉ TB đó được phép trống, các TB khác vẫn bắt buộc); DPG (`parse_dpg_force22h`, chỉ bắt buộc khi `force_22h`); caption rút gọn khi 12 TB gió thấp; thứ tự caption đang HĐ → lỗi → bảo trì → mất tín hiệu → gió thấp; `manual_intervention` overrides. Edge: thiếu key, parse fail, số âm, báo cáo 22h/23h.
 
 ### WhatsApp reliability
 

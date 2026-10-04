@@ -4,7 +4,9 @@ Luật mới (không còn scraped F/M, không còn fold AWS>=6):
   m_eff = số TB có công suất <= 0 và TBS ∈ {service mode, hmi stop, maintenance}
   f_eff = số TB có công suất <= 0 và TBS ∈ {fault stop, fault character}
   low_wind = số TB có công suất <= 0 và TBS chứa 'no enough wind'
-  active = DC - (m_eff + f_eff + low_wind)
+  lost_signal = số TB không đọc được công suất (None) + TBS 'front-end interruption'
+                — chi tiết ở tests/test_lost_signal.py
+  active = DC - (m_eff + f_eff + low_wind + lost_signal)
 """
 import os
 import sys

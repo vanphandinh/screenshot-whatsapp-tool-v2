@@ -290,7 +290,7 @@ async function getConfig() {
 function buildManualInterventionPayload(config) {
     const mi = config.manualIntervention || DEFAULT_CONFIG.manualIntervention;
     const enabled = Boolean(mi.enabled);
-    const allowed = new Set(['normal', 'maintenance', 'error', 'low_wind']);
+    const allowed = new Set(['normal', 'maintenance', 'error', 'low_wind', 'lost_signal']);
     const turbines = {};
     if (enabled && mi.turbines && typeof mi.turbines === 'object') {
         for (const [k, v] of Object.entries(mi.turbines)) {
@@ -909,6 +909,14 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
                 if (m && miSkipped.has(String(parseInt(m[2], 10)))) continue;
                 const info = response.data[key];
                 if (!info || info.value === undefined || info.value === '' || info.value === null) {
+                    // Ngoại lệ mất tín hiệu: TB không đọc được công suất + TBS 'front-end interruption'
+                    // → hợp lệ; mọi trường hợp khác vẫn là dữ liệu thiếu (các giá trị khác phải có)
+                    const tbMatch = /^TB(\d+)$/.exec(key);
+                    if (tbMatch) {
+                        const tbsInfo = response.data[`TBS${tbMatch[1]}`];
+                        const tbsVal = tbsInfo && typeof tbsInfo === 'object' ? tbsInfo.value : tbsInfo;
+                        if (isFrontEndInterruptionTbs(tbsVal)) continue;
+                    }
                     isDataValid = false;
                     emptyRequired.push(key);
                 }
@@ -1031,6 +1039,18 @@ function normalizeScrapedNumber(value, fieldName) {
     // Keep digits, separators, minus; drop unit letters/spaces like "MW", "m/s"
     const cleaned = s.replace(/[^\d,.\-]/g, '');
     return cleaned || s;
+}
+
+// ─── Front-end interruption (mất tín hiệu đường truyền) ───
+// TB không đọc được công suất + TBS 'front-end interruption' → hợp lệ (server tính lost_signal)
+function isFrontEndInterruptionTbs(value) {
+    const s = String(value === undefined || value === null ? '' : value)
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    return ['front-end interruption', 'front end interruption', 'frontend interruption']
+        .some(p => s.includes(p));
 }
 
 // ─── Send data to local Python server ───

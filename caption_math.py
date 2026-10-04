@@ -1,10 +1,13 @@
 """Caption count math + manual intervention parsing (no Flask deps).
 
-M (bảo trì), F (lỗi) và low_wind (gió thấp) được suy ra trực tiếp từ dữ liệu scrape:
+M (bảo trì), F (lỗi), low_wind (gió thấp) và lost_signal (mất tín hiệu đường truyền)
+được suy ra trực tiếp từ dữ liệu scrape:
   M = số TB có công suất <= 0 và TBS chứa cụm {service mode, hmi stop, maintenance}
   F = số TB có công suất <= 0 và TBS chứa cụm {fault stop, fault character}
   low_wind = số TB có công suất <= 0 và TBS chứa cụm {no enough wind}
-  active = DC - (M + F + low_wind)
+  lost_signal = số TB KHÔNG đọc được công suất (giá trị None) và TBS chứa cụm
+                {front-end interruption, front end interruption, frontend interruption}
+  active = DC - (M + F + low_wind + lost_signal)
 Không còn dùng giá trị F/M scrape từ dashboard (đã bỏ 2026-09).
 Không còn ngoại lệ AWS >= 6 (đã bỏ 2026-10).
 """
@@ -13,7 +16,8 @@ from typing import Optional
 MAINT_TBS = ("service mode", "hmi stop", "maintenance")
 FAULT_TBS = ("fault stop", "fault character")
 LOW_WIND_TBS = ("no enough wind",)
-MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
+LOST_SIGNAL_TBS = ("front-end interruption", "front end interruption", "frontend interruption")
+MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind", "lost_signal"})
 
 # Caption formatting helpers (pure, no Flask deps)
 CAPTION_PREFIX = "BC BLĐ: Hiện tại"
@@ -47,6 +51,19 @@ def _is_maint_tbs(norm: str) -> bool:
 def _is_low_wind_tbs(norm: str) -> bool:
     """True nếu chuỗi TBS đã chuẩn hóa chứa cụm gió thấp (include theo cụm)."""
     return any(p in norm for p in LOW_WIND_TBS)
+
+
+def _is_lost_signal_tbs(norm: str) -> bool:
+    """True nếu chuỗi TBS đã chuẩn hóa chứa cụm mất tín hiệu (front-end interruption)."""
+    return any(p in norm for p in LOST_SIGNAL_TBS)
+
+
+def is_lost_signal_tbs(raw) -> bool:
+    """Public: TBS thô (chuỗi scrape) có phải 'front-end interruption' không.
+
+    Dùng ở server để quyết định TB trống công suất có hợp lệ (mất tín hiệu) hay không.
+    """
+    return _is_lost_signal_tbs(_norm_tbs(raw))
 
 
 def parse_manual_intervention(raw):
@@ -104,7 +121,7 @@ def _count_maintenance(tb_values, tbs_raw):
     """M = các TB có công suất <= 0 và TBS chứa cụm bảo trì (service mode/hmi stop)."""
     count = 0
     for tb, tbs in zip(tb_values, tbs_raw):
-        if tb > 0:
+        if tb is None or tb > 0:
             continue
         norm = _norm_tbs(tbs)
         # Fault-first: chuỗi chứa cả 2 cụm được tính là lỗi, không tính trùng vào M
@@ -119,7 +136,7 @@ def _count_fault(tb_values, tbs_raw):
     """F = các TB có công suất <= 0 và TBS chứa cụm lỗi (fault stop/fault character)."""
     return sum(
         1 for tb, tbs in zip(tb_values, tbs_raw)
-        if tb <= 0 and _is_fault_tbs(_norm_tbs(tbs))
+        if tb is not None and tb <= 0 and _is_fault_tbs(_norm_tbs(tbs))
     )
 
 
@@ -127,7 +144,7 @@ def _count_low_wind(tb_values, tbs_raw):
     """low_wind = các TB có công suất <= 0 và TBS chứa cụm gió thấp (no enough wind)."""
     count = 0
     for tb, tbs in zip(tb_values, tbs_raw):
-        if tb > 0:
+        if tb is None or tb > 0:
             continue
         norm = _norm_tbs(tbs)
         # Fault-first rồi maint (giữ thứ tự check cũ); chuỗi chứa cụm lỗi/bảo trì
@@ -141,15 +158,27 @@ def _count_low_wind(tb_values, tbs_raw):
     return count
 
 
+def _count_lost_signal(tb_values, tbs_raw):
+    """lost_signal = các TB KHÔNG đọc được công suất (None) và TBS chứa cụm front-end interruption."""
+    count = 0
+    for tb, tbs in zip(tb_values, tbs_raw):
+        if tb is not None:
+            continue
+        if _is_lost_signal_tbs(_norm_tbs(tbs)):
+            count += 1
+    return count
+
+
 def _legacy_counts(tb_values, tbs_raw, dc_num):
-    """Caption math: M/F/low_wind suy ra từ TBS + công suất (không còn scraped F/M)."""
+    """Caption math: M/F/low_wind/lost_signal suy ra từ TBS + công suất (không còn scraped F/M)."""
     m_eff = _count_maintenance(tb_values, tbs_raw)
     f_eff = _count_fault(tb_values, tbs_raw)
     low_wind = _count_low_wind(tb_values, tbs_raw)
-    active = dc_num - (m_eff + f_eff + low_wind)
+    lost_signal = _count_lost_signal(tb_values, tbs_raw)
+    active = dc_num - (m_eff + f_eff + low_wind + lost_signal)
     if active < 0:
         raise CaptionMathError(
-            f"Inconsistent counts: active={active} (DC={dc_num}, m={m_eff}, f={f_eff}, low={low_wind})",
+            f"Inconsistent counts: active={active} (DC={dc_num}, m={m_eff}, f={f_eff}, low={low_wind}, lost={lost_signal})",
             error_code="INCONSISTENT_COUNTS",
         )
     return {
@@ -157,6 +186,7 @@ def _legacy_counts(tb_values, tbs_raw, dc_num):
         "m_eff": m_eff,
         "f_eff": f_eff,
         "low_wind": low_wind,
+        "lost_signal": lost_signal,
         "mi_enabled": False,
     }
 
@@ -165,6 +195,7 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
     """
     Classify each TB in only_indices (0-based) from scraped data:
       TB > 0                                          → normal
+      TB None (không đọc được) & TBS chứa LOST_SIGNAL_TBS → lost_signal
       TB <= 0 & TBS chứa cụm FAULT_TBS (check trước)  → error
       TB <= 0 & TBS chứa cụm MAINT_TBS                → maintenance
       TB <= 0 & TBS chứa cụm LOW_WIND_TBS             → low_wind
@@ -174,6 +205,10 @@ def _assign_scrape_statuses(tb_values, tbs_raw, only_indices):
     only_indices = set(only_indices)
     statuses = [None] * 12
     for i in only_indices:
+        if tb_values[i] is None:
+            # Không đọc được công suất: chỉ phân loại được khi TBS là front-end interruption
+            statuses[i] = "lost_signal" if _is_lost_signal_tbs(_norm_tbs(tbs_raw[i])) else None
+            continue
         if tb_values[i] > 0:
             statuses[i] = "normal"
             continue
@@ -194,12 +229,20 @@ def _format_one_decimal(value: float) -> str:
     return f"{float(value):.1f}".rstrip("0").rstrip(".")
 
 
-def is_all_low_wind(*, active: int, low_wind: int, m_eff: int, f_eff: int) -> bool:
+def is_all_low_wind(
+    *, active: int, low_wind: int, m_eff: int, f_eff: int, lost_signal: int = 0
+) -> bool:
     """
-    Strict-12 rule: cả 12 TB đều dừng do gió thấp, không lẫn lỗi/bảo trì.
+    Strict-12 rule: cả 12 TB đều dừng do gió thấp, không lẫn lỗi/bảo trì/mất tín hiệu.
     Áp dụng cho cả live và test (is_test không ảnh hưởng caption).
     """
-    return active == 0 and low_wind == 12 and m_eff == 0 and f_eff == 0
+    return (
+        active == 0
+        and low_wind == 12
+        and m_eff == 0
+        and f_eff == 0
+        and lost_signal == 0
+    )
 
 
 def build_caption(
@@ -212,11 +255,13 @@ def build_caption(
     tap_num: float,
     dpg_display: Optional[str] = None,
     force_22h: bool = False,
+    lost_signal: int = 0,
 ) -> str:
     """
     Build WhatsApp caption. Pure function — easy to unit-test.
 
-    - Khi is_all_low_wind (active==0 && low_wind==12 && m==0 && f==0):
+    - Thứ tự đoạn: đang hoạt động → lỗi → bảo trì → mất tín hiệu → gió thấp.
+    - Khi is_all_low_wind (active==0 && low_wind==12 && m==0 && f==0 && lost==0):
       rút gọn, KHÔNG gửi `tốc độ gió` và `công suất phát`.
     - DPG (Daily Power Generation) vẫn được gắn nếu
       force_22h và dpg_display có giá trị (giữ hành vi 22h/23h cũ).
@@ -229,6 +274,7 @@ def build_caption(
     low_wind = int(low_wind)
     m_eff = int(m_eff)
     f_eff = int(f_eff)
+    lost_signal = int(lost_signal)
 
     aws_display = _format_one_decimal(aws_num)
     tap_display = _format_one_decimal(tap_num)
@@ -236,15 +282,20 @@ def build_caption(
     # low_wind luôn hiện khi > 0 (đã bỏ ngoại lệ AWS >= 6 từ 2026-10).
     show_low_wind = low_wind > 0
 
-    if is_all_low_wind(active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff):
+    if is_all_low_wind(
+        active=active, low_wind=low_wind, m_eff=m_eff, f_eff=f_eff,
+        lost_signal=lost_signal,
+    ):
         # Rút gọn: chỉ giữ số liệu TB, bỏ gió/công suất
         caption = f"{CAPTION_PREFIX} {active} TB đang hoạt động, {low_wind} TB dừng do tốc độ gió thấp."
     else:
+        # Thứ tự mới: đang hoạt động → lỗi → bảo trì → mất tín hiệu → gió thấp
         caption = (
             f"{CAPTION_PREFIX} {active} TB đang hoạt động, "
-            + (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "")
-            + (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "")
             + (f"{f_eff} TB dừng do bị lỗi, " if f_eff > 0 else "")
+            + (f"{m_eff} TB dừng do đang bảo trì, " if m_eff > 0 else "")
+            + (f"{lost_signal} TB mất tín hiệu đường truyền, " if lost_signal > 0 else "")
+            + (f"{low_wind} TB dừng do tốc độ gió thấp, " if show_low_wind else "")
             + f"tốc độ gió {aws_display} m/s, "
             + f"công suất phát {tap_display} MW."
         )
@@ -260,12 +311,14 @@ def build_caption(
 
 def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbines=None):
     """
-    Compute active / m_eff / f_eff / low_wind for WhatsApp caption.
+    Compute active / m_eff / f_eff / low_wind / lost_signal for WhatsApp caption.
 
     m_eff = TBs with power <= 0 and TBS chứa cụm MAINT_TBS (service mode / hmi stop)
     f_eff = TBs with power <= 0 and TBS chứa cụm FAULT_TBS (fault stop / fault character)
     low_wind = TBs with power <= 0 and TBS chứa cụm LOW_WIND_TBS (no enough wind)
-    active = DC - (m_eff + f_eff + low_wind)
+    lost_signal = TBs with unreadable power (None) and TBS chứa cụm LOST_SIGNAL_TBS
+                  (front-end interruption)
+    active = DC - (m_eff + f_eff + low_wind + lost_signal)
 
     When mi_enabled is False or turbines empty: full-farm math.
     When mi_enabled with overrides:
@@ -286,7 +339,7 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbine
     non = [i for i in range(1, 13) if i not in overridden]
 
     if not non:
-        active_1 = m_1 = f_1 = low_wind_1 = 0
+        active_1 = m_1 = f_1 = low_wind_1 = lost_signal_1 = 0
     else:
         non_idx = [i - 1 for i in non]
         scrape_statuses = _assign_scrape_statuses(
@@ -298,10 +351,11 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbine
         m_1 = sum(1 for i in non if scrape_statuses[i - 1] == "maintenance")
         f_1 = sum(1 for i in non if scrape_statuses[i - 1] == "error")
         low_wind_1 = sum(1 for i in non if scrape_statuses[i - 1] == "low_wind")
+        lost_signal_1 = sum(1 for i in non if scrape_statuses[i - 1] == "lost_signal")
         dc_1 = max(0, dc_num - len(overridden))
         active_1 = dc_1 - inactive_1
 
-    n_normal = n_maint = n_error = n_low = 0
+    n_normal = n_maint = n_error = n_low = n_lost = 0
     for st in turbines.values():
         if st == "normal":
             n_normal += 1
@@ -311,11 +365,14 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbine
             n_error += 1
         elif st == "low_wind":
             n_low += 1
+        elif st == "lost_signal":
+            n_lost += 1
 
     active = active_1 + n_normal
     m_eff = m_1 + n_maint
     f_eff = f_1 + n_error
     low_wind = low_wind_1 + n_low
+    lost_signal = lost_signal_1 + n_lost
 
     if active < 0:
         raise CaptionMathError(
@@ -327,12 +384,14 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbine
         "m_eff": m_eff,
         "f_eff": f_eff,
         "low_wind": low_wind,
+        "lost_signal": lost_signal,
         "mi_enabled": True,
         "phase1": {
             "active": active_1,
             "m": m_1,
             "f": f_1,
             "low_wind": low_wind_1,
+            "lost_signal": lost_signal_1,
             "non_count": len(non),
             "dc_1": max(0, dc_num - len(overridden)),
         },
@@ -341,5 +400,6 @@ def compute_caption_counts(tb_values, tbs_raw, dc_num, mi_enabled=False, turbine
             "maintenance": n_maint,
             "error": n_error,
             "low_wind": n_low,
+            "lost_signal": n_lost,
         },
     }
