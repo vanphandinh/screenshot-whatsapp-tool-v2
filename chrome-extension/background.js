@@ -263,14 +263,6 @@ async function getConfig() {
                 // Migration: bỏ F/M scrape — server không nhận 2 trường này nữa
                 delete mergedSelectors.F;
                 delete mergedSelectors.M;
-                // Migration DEG → DPG (Daily Energy Production → Daily Power Production):
-                // giữ selector người dùng đã map cho DEG, copy sang DPG nếu DPG còn trống, rồi xóa key cũ
-                if ((!mergedSelectors.DPG || !String(mergedSelectors.DPG).trim()) && result.config.selectors && result.config.selectors.DEG) {
-                    mergedSelectors.DPG = result.config.selectors.DEG;
-                }
-                if ('DEG' in mergedSelectors) {
-                    delete mergedSelectors.DEG;
-                }
                 const miStored = result.config.manualIntervention || {};
                 const manualIntervention = {
                     enabled: Boolean(miStored.enabled),
@@ -337,7 +329,7 @@ async function saveScheduleState(state) {
     });
 }
 
-// ─── DPG Report (Daily Power Production, trước đây là DEG — sản lượng đầu cực) daily tracking ───
+// ─── DPG Report (Daily Power Production — sản lượng đầu cực) daily tracking ───
 
 /**
  * Get today's date string in YYYY-MM-DD format (local time).
@@ -352,10 +344,8 @@ function getTodayDateString() {
  */
 async function isDpgReportSentToday() {
     return new Promise((resolve) => {
-        // DPG = Daily Power Production (trước đây là DEG); đọc cả key cũ để không gửi trùng sau update
-        chrome.storage.local.get(['dpgReportDate', 'degReportDate'], (data) => {
-            const today = getTodayDateString();
-            resolve(data.dpgReportDate === today || data.degReportDate === today);
+        chrome.storage.local.get('dpgReportDate', (data) => {
+            resolve(data.dpgReportDate === getTodayDateString());
         });
     });
 }
@@ -365,8 +355,7 @@ async function isDpgReportSentToday() {
  */
 async function markDpgReportSent() {
     return new Promise((resolve) => {
-        // Ghi cả key mới (dpgReportDate) và key cũ (degReportDate) trong giai đoạn chuyển đổi
-        chrome.storage.local.set({ dpgReportDate: getTodayDateString(), degReportDate: getTodayDateString() }, resolve);
+        chrome.storage.local.set({ dpgReportDate: getTodayDateString() }, resolve);
     });
 }
 
@@ -412,7 +401,6 @@ async function scheduleDpgFallbackIfNeeded() {
     const alreadySent = await isDpgReportSentToday();
     if (alreadySent) {
         await chrome.alarms.clear('dom-capture-dpg-fallback');
-        await chrome.alarms.clear('dom-capture-deg-fallback'); // legacy DEG alarm
         return;
     }
 
@@ -420,7 +408,6 @@ async function scheduleDpgFallbackIfNeeded() {
     if (intervalHours === 0) {
         // Debug mode: scheduled test path covers capture; no live DPG fallback
         await chrome.alarms.clear('dom-capture-dpg-fallback');
-        await chrome.alarms.clear('dom-capture-deg-fallback'); // legacy DEG alarm
         return;
     }
 
@@ -952,7 +939,7 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
 
             let force22hEffective = force22h;
             if (force22h) {
-                const dpgNorm = normalizedData.DPG?.value ?? normalizedData.DEG?.value ?? '';
+                const dpgNorm = normalizedData.DPG?.value ?? '';
                 if (!dpgNorm) {
                     force22hEffective = false;
                     console.warn('[DOMCapture] force22h requested but DPG empty — sending hourly report without DPG');
@@ -960,12 +947,6 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
                 }
             }
 
-            // Tương thích server cũ: gửi cả DPG (mới) và DEG (cũ) với cùng giá trị
-            if (normalizedData.DPG && !normalizedData.DEG) {
-                normalizedData.DEG = normalizedData.DPG;
-            } else if (normalizedData.DEG && !normalizedData.DPG) {
-                normalizedData.DPG = normalizedData.DEG;
-            }
             const payload = {
                 timestamp: new Date().toISOString(),
                 url: config.targetUrl,
@@ -1270,7 +1251,7 @@ async function runScheduledJob() {
     const preScheduledState = await scheduleNext(true, 'Pre-scheduled (job running...)');
     console.log('[DOMCapture] ✅ Next run pre-scheduled at', preScheduledState.nextRun);
 
-        // Determine if this run should include DPG report (Daily Power Production, trước đây là DEG)
+        // Determine if this run should include DPG report (sản lượng đầu cực)
     const currentHour = new Date().getHours();
     let force22h = false;
 
@@ -1600,7 +1581,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await chrome.alarms.clear('dom-capture-watchdog');
     }
 
-    if (alarm.name === 'dom-capture-dpg-fallback' || alarm.name === 'dom-capture-deg-fallback') {
+    if (alarm.name === 'dom-capture-dpg-fallback') {
         chrome.alarms.create('dom-capture-watchdog', { delayInMinutes: 10 });
         try {
             await runDpgFallbackJob();
@@ -1750,12 +1731,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     }
                 }
 
-                // Tương thích server cũ: mock DPG cũng gửi kèm DEG
-                if (mockData.DPG && !mockData.DEG) {
-                    mockData.DEG = mockData.DPG;
-                } else if (mockData.DEG && !mockData.DPG) {
-                    mockData.DPG = mockData.DEG;
-                }
                 const payload = {
                     timestamp: ts,
                     url: config.targetUrl || 'test-mode',

@@ -2,7 +2,7 @@
 
 Yêu cầu:
 - Đúng 12 TB gió thấp (strict 12): active==0 && low_wind==12 && m==0 && f==0 → rút gọn, ẩn gió/công suất
-- Giữ DPG (Daily Power Production, trước đây là DEG) cho 22h như cũ
+- Giữ DPG (Daily Power Production) cho 22h như cũ
 - Áp dụng cho cả is_test (caption logic không phân biệt, test ở đây đảm bảo build_caption không phụ thuộc is_test)
 """
 import os
@@ -181,19 +181,3 @@ def test_build_caption_is_test_same_as_live():
     # also verify non-short case identical
     base2 = dict(active=5, low_wind=3, m_eff=2, f_eff=2, aws_num=3.2, tap_num=7.1, dpg_display="", force_22h=False)
     assert build_caption(**base2) == build_caption(**base2)
-
-
-def test_build_caption_deg_alias_backward_compat():
-    # Alias cũ DEG vẫn hoạt động khi dpg_display rỗng/None (giai đoạn chuyển đổi)
-    caption_new = build_caption(
-        active=7, low_wind=2, m_eff=0, f_eff=0,
-        aws_num=2.1, tap_num=9.0,
-        dpg_display="80.4", force_22h=True,
-    )
-    caption_old = build_caption(
-        active=7, low_wind=2, m_eff=0, f_eff=0,
-        aws_num=2.1, tap_num=9.0,
-        deg_display="80.4", force_22h=True,
-    )
-    assert caption_new == caption_old
-    assert "80.4 MWh" in caption_old

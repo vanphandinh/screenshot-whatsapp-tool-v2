@@ -366,17 +366,13 @@ def parse_number(v):
 
 
 def parse_dpg_force22h(raw):
-    """Parse DPG (Daily Power Production, trước đây là DEG) for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
+    """Parse DPG (Daily Power Production) for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
     s = str(raw).strip().replace('\u2212', '-').replace('\u2013', '-').replace('\u2014', '-')
     s = re.sub(r'(?i)\s*(mw|mwh|m/s|tb|kwh|kw)\s*$', '', s).strip()
     s = re.sub(r'[^\d,.\-]', '', s)
     if re.match(r'^\d{1,3}\.\d{3}$', s):
         return float(s.replace('.', ''))
     return parse_number(raw)
-
-
-# Alias cũ: DEG = Daily Energy Production → DPG = Daily Power Production
-parse_deg_force22h = parse_dpg_force22h
 
 
 def validate_recipient(number):
@@ -954,7 +950,7 @@ def capture():
         dc = get_val("DC")
         aws = get_val("AWS")
         tap = get_val("TAP")
-        dpg = get_val("DPG") or get_val("DEG")  # DEG: alias cũ (Daily Energy Production)
+        dpg = get_val("DPG")
         tb_names = [f"TB{i}" for i in range(1, 13)]
         tb_raw = [get_val(n) for n in tb_names]
         tbs_names = [f"TBS{i}" for i in range(1, 13)]

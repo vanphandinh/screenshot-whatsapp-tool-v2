@@ -18,8 +18,6 @@ MI_STATUSES = frozenset({"normal", "maintenance", "error", "low_wind"})
 # Caption formatting helpers (pure, no Flask deps)
 CAPTION_PREFIX = "BC BLĐ: Hiện tại"
 DPG_SUFFIX_TEMPLATE = " Sản lượng đầu cực đến thời điểm hiện tại đạt {dpg} MWh."
-# Deprecated alias: DEG = Daily Energy Production → DPG = Daily Power Production
-DEG_SUFFIX_TEMPLATE = " Sản lượng đầu cực đến thời điểm hiện tại đạt {deg} MWh."
 
 
 class CaptionMathError(Exception):
@@ -214,17 +212,15 @@ def build_caption(
     tap_num: float,
     dpg_display: Optional[str] = None,
     force_22h: bool = False,
-    deg_display: Optional[str] = None,
 ) -> str:
     """
     Build WhatsApp caption. Pure function — easy to unit-test.
 
     - Khi is_all_low_wind (active==0 && low_wind==12 && m==0 && f==0):
       rút gọn, KHÔNG gửi `tốc độ gió` và `công suất phát`.
-    - DPG (Daily Power Production, trước đây là DEG) vẫn được gắn nếu
+    - DPG (Daily Power Production) vẫn được gắn nếu
       force_22h và dpg_display có giá trị (giữ hành vi 22h/23h cũ).
     - Áp dụng cho cả is_test và live (không phân biệt).
-    - deg_display là alias cũ, chỉ dùng khi dpg_display rỗng/None.
 
     Returns caption string ending with '.' (và có thể thêm câu DPG).
     """
@@ -254,8 +250,7 @@ def build_caption(
         )
 
     # DPG: giữ nguyên hành vi 22h/23h — không bị ảnh hưởng bởi rút gọn
-    _dpg = (dpg_display if dpg_display not in (None, "") else (deg_display or "")) or ""
-    dpg_str = _dpg.strip()
+    dpg_str = (dpg_display or "").strip()
     if force_22h and dpg_str:
         # dpg_str đã được format ở server (dpg_display), chỉ cần gắn
         caption += DPG_SUFFIX_TEMPLATE.format(dpg=dpg_str)

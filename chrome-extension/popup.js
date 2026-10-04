@@ -88,7 +88,7 @@ const TEST_SCENARIOS = {
     all_22h: withTbs({ DC: '12', AWS: '2.1', TAP: '9.0', DPG: '72.3', TB1: '1.5', TB2: '1.6', TB3: '1.4', TB4: '1.5', TB5: '1.6', TB6: '1.4', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }, { TBS7: 'Fault stop', TBS11: 'Service mode', TBS12: 'HMI stop' }),
     // Strict-12 low wind: 12 TB<=0 + 'No enough wind' → 0/12/0/0 → caption rút gọn
     all_low_wind: withTbs({ DC: '12', AWS: '1.9', TAP: '0', DPG: '70.0', TB1: '0', TB2: '0', TB3: '0', TB4: '0', TB5: '0', TB6: '0', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: false }),
-    // Strict-12 low wind + 22h: caption rút gọn + DPG (Daily Power Production, trước đây là DEG)
+    // Strict-12 low wind + 22h: caption rút gọn + DPG
     all_low_wind_22h: withTbs({ DC: '12', AWS: '1.9', TAP: '0', DPG: '70.0', TB1: '0', TB2: '0', TB3: '0', TB4: '0', TB5: '0', TB6: '0', TB7: '0', TB8: '0', TB9: '0', TB10: '0', TB11: '0', TB12: '0', force_22h: true }),
 };
 
