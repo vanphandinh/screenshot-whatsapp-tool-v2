@@ -365,14 +365,18 @@ def parse_number(v):
     return float(s)
 
 
-def parse_deg_force22h(raw):
-    """Parse DEG for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
+def parse_dpg_force22h(raw):
+    """Parse DPG (Daily Power Production, trước đây là DEG) for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
     s = str(raw).strip().replace('\u2212', '-').replace('\u2013', '-').replace('\u2014', '-')
     s = re.sub(r'(?i)\s*(mw|mwh|m/s|tb|kwh|kw)\s*$', '', s).strip()
     s = re.sub(r'[^\d,.\-]', '', s)
     if re.match(r'^\d{1,3}\.\d{3}$', s):
         return float(s.replace('.', ''))
     return parse_number(raw)
+
+
+# Alias cũ: DEG = Daily Energy Production → DPG = Daily Power Production
+parse_deg_force22h = parse_dpg_force22h
 
 
 def validate_recipient(number):
@@ -950,7 +954,7 @@ def capture():
         dc = get_val("DC")
         aws = get_val("AWS")
         tap = get_val("TAP")
-        deg = get_val("DEG")
+        dpg = get_val("DPG") or get_val("DEG")  # DEG: alias cũ (Daily Energy Production)
         tb_names = [f"TB{i}" for i in range(1, 13)]
         tb_raw = [get_val(n) for n in tb_names]
         tbs_names = [f"TBS{i}" for i in range(1, 13)]
@@ -968,7 +972,7 @@ def capture():
                 "fields": e.fields,
             }), 400
 
-        # DEG only required for 22h/DEG report; hourly runs must not fail on empty DEG
+        # DPG only required for 22h/DPG report; hourly runs must not fail on empty DPG
         # F/M no longer accepted from the extension — derived server-side from TBS + power
         # MI: TB/TBS scrape của turbine đã can thiệp được bỏ qua (missing + invalid)
         overridden = set(mi_turbines.keys()) if mi_enabled else set()
@@ -976,8 +980,8 @@ def capture():
         for name, val in [("DC", dc), ("AWS", aws), ("TAP", tap)]:
             if not val:
                 missing.append(name)
-        if force_22h and not deg:
-            missing.append("DEG")
+        if force_22h and not dpg:
+            missing.append("DPG")
         for idx, (name, val) in enumerate(zip(tb_names, tb_raw), start=1):
             if not val and idx not in overridden:
                 missing.append(name)
@@ -1027,17 +1031,17 @@ def capture():
             log(msg, "ERROR")
             return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "AWS"}), 400
 
-        deg_display = deg
-        if force_22h and deg:
+        dpg_display = dpg
+        if force_22h and dpg:
             try:
-                deg_num = parse_deg_force22h(deg)
-                if deg_num < 0:
-                    raise ValueError("negative DEG")
-                deg_display = f"{deg_num:.1f}".rstrip('0').rstrip('.')
+                dpg_num = parse_dpg_force22h(dpg)
+                if dpg_num < 0:
+                    raise ValueError("negative DPG")
+                dpg_display = f"{dpg_num:.1f}".rstrip('0').rstrip('.')
             except ValueError:
-                msg = f"Invalid DEG value: {deg!r}"
+                msg = f"Invalid DPG value: {dpg!r}"
                 log(msg, "ERROR")
-                return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "DEG"}), 400
+                return jsonify({"success": False, "error": msg, "error_code": "INVALID_FIELD", "field": "DPG"}), 400
 
         try:
             counts = compute_caption_counts(
@@ -1098,7 +1102,7 @@ def capture():
                 f_eff=f_eff,
                 aws_num=aws_num,
                 tap_num=tap_num,
-                deg_display=deg_display,
+                dpg_display=dpg_display,
                 force_22h=force_22h,
             )
             # Display values for response payload (keep same formatting as caption)
@@ -1136,7 +1140,7 @@ def capture():
                     "is_test": is_test,
                     "values": {
                         "DC": dc, "AWS": aws_display, "TAP": tap_display,
-                        "DEG": deg_display,
+                        "DPG": dpg_display,
                         "active": str(active)
                     }
                 }
@@ -1208,7 +1212,7 @@ def capture():
                 "wa_verified": wa_meta.get("verified"),
                 "values": {
                     "DC": dc, "AWS": aws_display, "TAP": tap_display,
-                    "DEG": deg_display,
+                    "DPG": dpg_display,
                     "active": str(active)
                 }
             }

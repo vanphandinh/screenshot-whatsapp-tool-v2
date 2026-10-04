@@ -9,7 +9,7 @@
 // Các trường dữ liệu server yêu cầu (phải khớp tên với server.py)
 // Lưu ý: không còn F/M — server tự tính từ TBS (service mode/hmi stop/fault stop) + công suất
 const REQUIRED_FIELDS = [
-    'DC', 'AWS', 'TAP', 'DEG',
+    'DC', 'AWS', 'TAP', 'DPG',
     'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TB6',
     'TB7', 'TB8', 'TB9', 'TB10', 'TB11', 'TB12',
     'TBS1', 'TBS2', 'TBS3', 'TBS4', 'TBS5', 'TBS6',
@@ -263,6 +263,14 @@ async function getConfig() {
                 // Migration: bỏ F/M scrape — server không nhận 2 trường này nữa
                 delete mergedSelectors.F;
                 delete mergedSelectors.M;
+                // Migration DEG → DPG (Daily Energy Production → Daily Power Production):
+                // giữ selector người dùng đã map cho DEG, copy sang DPG nếu DPG còn trống, rồi xóa key cũ
+                if ((!mergedSelectors.DPG || !String(mergedSelectors.DPG).trim()) && result.config.selectors && result.config.selectors.DEG) {
+                    mergedSelectors.DPG = result.config.selectors.DEG;
+                }
+                if ('DEG' in mergedSelectors) {
+                    delete mergedSelectors.DEG;
+                }
                 const miStored = result.config.manualIntervention || {};
                 const manualIntervention = {
                     enabled: Boolean(miStored.enabled),
@@ -329,7 +337,7 @@ async function saveScheduleState(state) {
     });
 }
 
-// ─── DEG Report (sản lượng đầu cực) daily tracking ───
+// ─── DPG Report (Daily Power Production, trước đây là DEG — sản lượng đầu cực) daily tracking ───
 
 /**
  * Get today's date string in YYYY-MM-DD format (local time).
@@ -340,22 +348,25 @@ function getTodayDateString() {
 }
 
 /**
- * Check if the DEG report has already been sent today.
+ * Check if the DPG report has already been sent today.
  */
-async function isDegReportSentToday() {
+async function isDpgReportSentToday() {
     return new Promise((resolve) => {
-        chrome.storage.local.get('degReportDate', (data) => {
-            resolve(data.degReportDate === getTodayDateString());
+        // DPG = Daily Power Production (trước đây là DEG); đọc cả key cũ để không gửi trùng sau update
+        chrome.storage.local.get(['dpgReportDate', 'degReportDate'], (data) => {
+            const today = getTodayDateString();
+            resolve(data.dpgReportDate === today || data.degReportDate === today);
         });
     });
 }
 
 /**
- * Mark the DEG report as sent for today.
+ * Mark the DPG report as sent for today.
  */
-async function markDegReportSent() {
+async function markDpgReportSent() {
     return new Promise((resolve) => {
-        chrome.storage.local.set({ degReportDate: getTodayDateString() }, resolve);
+        // Ghi cả key mới (dpgReportDate) và key cũ (degReportDate) trong giai đoạn chuyển đổi
+        chrome.storage.local.set({ dpgReportDate: getTodayDateString(), degReportDate: getTodayDateString() }, resolve);
     });
 }
 
@@ -386,28 +397,30 @@ async function willCurrentScheduleHit22() {
 }
 
 /**
- * Schedule the 23h fallback alarm for DEG report if needed.
+ * Schedule the 23h fallback alarm for DPG report if needed.
  * Only schedules if:
  *   1. Auto-capture is enabled
  *   2. Interval is 2h (so 22h might be skipped)
  *   3. The current schedule pattern won't hit 22h
- *   4. DEG report hasn't been sent today
+ *   4. DPG report hasn't been sent today
  *   5. It's not already past 23h today
  */
-async function scheduleDegFallbackIfNeeded() {
+async function scheduleDpgFallbackIfNeeded() {
     const config = await getConfig();
     if (!config.autoCapture) return;
 
-    const alreadySent = await isDegReportSentToday();
+    const alreadySent = await isDpgReportSentToday();
     if (alreadySent) {
-        await chrome.alarms.clear('dom-capture-deg-fallback');
+        await chrome.alarms.clear('dom-capture-dpg-fallback');
+        await chrome.alarms.clear('dom-capture-deg-fallback'); // legacy DEG alarm
         return;
     }
 
     const intervalHours = config.intervalHours || 1;
     if (intervalHours === 0) {
-        // Debug mode: scheduled test path covers capture; no live DEG fallback
-        await chrome.alarms.clear('dom-capture-deg-fallback');
+        // Debug mode: scheduled test path covers capture; no live DPG fallback
+        await chrome.alarms.clear('dom-capture-dpg-fallback');
+        await chrome.alarms.clear('dom-capture-deg-fallback'); // legacy DEG alarm
         return;
     }
 
@@ -416,33 +429,33 @@ async function scheduleDegFallbackIfNeeded() {
 
     if (intervalHours <= 1) {
         if (currentHour >= 23) {
-            // Late Chrome start: still need DEG tonight
-            chrome.alarms.create('dom-capture-deg-fallback', {
+            // Late Chrome start: still need DPG tonight
+            chrome.alarms.create('dom-capture-dpg-fallback', {
                 when: Date.now() + 60000
             });
-            console.log('[DOMCapture] Past 23h without DEG — scheduling immediate fallback in 1 min');
-            await addCaptureLog('info', 'Đã qua 23h chưa gửi DEG → thử báo cáo sản lượng trong 1 phút');
+            console.log('[DOMCapture] Past 23h without DPG — scheduling immediate fallback in 1 min');
+            await addCaptureLog('info', 'Đã qua 23h chưa gửi DPG → thử báo cáo sản lượng trong 1 phút');
             return;
         }
         // Hourly schedule covers 22h while Chrome stays open
-        await chrome.alarms.clear('dom-capture-deg-fallback');
+        await chrome.alarms.clear('dom-capture-dpg-fallback');
         return;
     }
 
-    // interval > 1: late start past 23h still needs DEG tonight
+    // interval > 1: late start past 23h still needs DPG tonight
     if (currentHour >= 23) {
-        chrome.alarms.create('dom-capture-deg-fallback', {
+        chrome.alarms.create('dom-capture-dpg-fallback', {
             when: Date.now() + 60000
         });
-        console.log('[DOMCapture] Past 23h without DEG — scheduling immediate fallback in 1 min');
-        await addCaptureLog('info', 'Đã qua 23h chưa gửi DEG → thử báo cáo sản lượng trong 1 phút');
+        console.log('[DOMCapture] Past 23h without DPG — scheduling immediate fallback in 1 min');
+        await addCaptureLog('info', 'Đã qua 23h chưa gửi DPG → thử báo cáo sản lượng trong 1 phút');
         return;
     }
 
     // Check if regular schedule will hit 22h
     const hitsAt22 = await willCurrentScheduleHit22();
     if (hitsAt22) {
-        await chrome.alarms.clear('dom-capture-deg-fallback');
+        await chrome.alarms.clear('dom-capture-dpg-fallback');
         return;
     }
 
@@ -451,10 +464,10 @@ async function scheduleDegFallbackIfNeeded() {
     fallbackTime.setHours(23, 0, 0, 0);
 
     if (fallbackTime.getTime() > now.getTime()) {
-        chrome.alarms.create('dom-capture-deg-fallback', {
+        chrome.alarms.create('dom-capture-dpg-fallback', {
             when: fallbackTime.getTime()
         });
-        console.log(`[DOMCapture] DEG fallback alarm scheduled at 23:00 (${fallbackTime.toISOString()})`);
+        console.log(`[DOMCapture] DPG fallback alarm scheduled at 23:00 (${fallbackTime.toISOString()})`);
         await addCaptureLog('info', 'Lịch 22h bị bỏ qua → đã lên lịch báo cáo sản lượng đầu cực lúc 23:00');
     }
 }
@@ -897,14 +910,14 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
                 return { success: false, error: 'Failed to extract data from page', errorKind: 'extract' };
             }
 
-            // DEG may be empty on hourly runs; required only for force22h
+            // DPG may be empty on hourly runs; required only for force22h
             // MI: TB/TBS scrape của turbine đã can thiệp được bỏ qua (missing)
             const miPayloadForSkip = buildManualInterventionPayload(config);
             const miSkipped = new Set(Object.keys(miPayloadForSkip.turbines || {}).map(k => String(parseInt(k, 10))));
             let isDataValid = true;
             const emptyRequired = [];
             for (const key of REQUIRED_FIELDS) {
-                if (key === 'DEG') continue; // optional at extract; force_22h handled in payload
+                if (key === 'DPG') continue; // optional at extract; force_22h handled in payload
                 const m = /^(TBS?)(\d+)$/.exec(key);
                 if (m && miSkipped.has(String(parseInt(m[2], 10)))) continue;
                 const info = response.data[key];
@@ -939,14 +952,20 @@ async function captureData(force22h = false, isTest = false, opts = {}) {
 
             let force22hEffective = force22h;
             if (force22h) {
-                const degNorm = normalizedData.DEG?.value ?? '';
-                if (!degNorm) {
+                const dpgNorm = normalizedData.DPG?.value ?? normalizedData.DEG?.value ?? '';
+                if (!dpgNorm) {
                     force22hEffective = false;
-                    console.warn('[DOMCapture] force22h requested but DEG empty — sending hourly report without DEG');
-                    await addCaptureLog('warning', 'DEG trống trong khung 22h → gửi báo cáo giờ (không ép sản lượng đầu cực)');
+                    console.warn('[DOMCapture] force22h requested but DPG empty — sending hourly report without DPG');
+                    await addCaptureLog('warning', 'DPG trống trong khung 22h → gửi báo cáo giờ (không ép sản lượng đầu cực)');
                 }
             }
 
+            // Tương thích server cũ: gửi cả DPG (mới) và DEG (cũ) với cùng giá trị
+            if (normalizedData.DPG && !normalizedData.DEG) {
+                normalizedData.DEG = normalizedData.DPG;
+            } else if (normalizedData.DEG && !normalizedData.DPG) {
+                normalizedData.DPG = normalizedData.DEG;
+            }
             const payload = {
                 timestamp: new Date().toISOString(),
                 url: config.targetUrl,
@@ -1251,17 +1270,17 @@ async function runScheduledJob() {
     const preScheduledState = await scheduleNext(true, 'Pre-scheduled (job running...)');
     console.log('[DOMCapture] ✅ Next run pre-scheduled at', preScheduledState.nextRun);
 
-    // Determine if this run should include DEG report (sản lượng đầu cực)
+        // Determine if this run should include DPG report (Daily Power Production, trước đây là DEG)
     const currentHour = new Date().getHours();
     let force22h = false;
 
     if (currentHour === 22 || currentHour === 23) {
-        const alreadySent = await isDegReportSentToday();
+        const alreadySent = await isDpgReportSentToday();
         if (!alreadySent) {
             force22h = true;
-            console.log(`[DOMCapture] Current hour is ${currentHour} → including DEG report`);
+            console.log(`[DOMCapture] Current hour is ${currentHour} → including DPG report`);
         } else {
-            console.log(`[DOMCapture] Current hour is ${currentHour} but DEG report already sent today`);
+            console.log(`[DOMCapture] Current hour is ${currentHour} but DPG report already sent today`);
         }
     }
 
@@ -1282,11 +1301,11 @@ async function runScheduledJob() {
 
     if (result.success) {
         await chrome.storage.local.set({ networkFailCount: 0, waFailCount: 0, extractFailCount: 0, transientFailCount: 0 });
-        // Only mark DEG for live (non-debug) successful sends
+        // Only mark DPG for live (non-debug) successful sends
         if (force22h && !isTestMode) {
-            await markDegReportSent();
-            console.log('[DOMCapture] ✅ DEG report marked as sent for today');
-            await chrome.alarms.clear('dom-capture-deg-fallback');
+            await markDpgReportSent();
+            console.log('[DOMCapture] ✅ DPG report marked as sent for today');
+            await chrome.alarms.clear('dom-capture-dpg-fallback');
         }
 
         console.log('[DOMCapture] ✅ Job succeeded! Next run already pre-scheduled.');
@@ -1339,7 +1358,7 @@ async function runScheduledJob() {
                 console.log(`[DOMCapture] ⚠️ Timeout but server confirmed send FAILED (${outcome.detail}). Retrying.`);
                 await addCaptureLog('error', `Timeout nhưng server xác nhận gửi THẤT BẠI. Retry trong 5 phút.`);
                 await scheduleNext(false, 'Send failed after timeout (server-confirmed)');
-                // Skip scheduleDegFallbackIfNeeded below: the 5-min retry re-attempts with
+                // Skip scheduleDpgFallbackIfNeeded below: the 5-min retry re-attempts with
                 // the correct force_22h flag (hour is still 22/23), so a separate 23h
                 // fallback alarm would only double-schedule the same report.
                 return;
@@ -1348,8 +1367,8 @@ async function runScheduledJob() {
                 console.log('[DOMCapture] Timeout but server confirmed send SUCCEEDED. No retry.');
                 await addCaptureLog('error', 'Timeout nhưng server xác nhận đã gửi thành công. Không retry để tránh trùng.');
                 if (force22h && !isTestMode) {
-                    await markDegReportSent();
-                    await chrome.alarms.clear('dom-capture-deg-fallback');
+                    await markDpgReportSent();
+                    await chrome.alarms.clear('dom-capture-dpg-fallback');
                 }
                 await saveScheduleState({
                     ...preScheduledState,
@@ -1362,8 +1381,8 @@ async function runScheduledJob() {
                 console.log(`[DOMCapture] ⚠️ Timeout / SEND_TIMEOUT: ${result.error}. Keeping pre-scheduled next run.`);
                 await addCaptureLog('error', `Timeout gửi WA (có thể đã/đang gửi). Không retry 5 phút để tránh trùng.`);
                 if (force22h && !isTestMode) {
-                    await markDegReportSent();
-                    await chrome.alarms.clear('dom-capture-deg-fallback');
+                    await markDpgReportSent();
+                    await chrome.alarms.clear('dom-capture-dpg-fallback');
                 }
                 await saveScheduleState({
                     ...preScheduledState,
@@ -1426,25 +1445,25 @@ async function runScheduledJob() {
         }
     }
 
-    // After scheduling next run, check if we need a 23h DEG fallback
-    await scheduleDegFallbackIfNeeded();
+    // After scheduling next run, check if we need a 23h DPG fallback
+    await scheduleDpgFallbackIfNeeded();
 }
 
-// ─── Run the DEG fallback job (23h) ───
-async function runDegFallbackJob() {
+// ─── Run the DPG fallback job (23h) ───
+async function runDpgFallbackJob() {
     console.log('[DOMCapture] ════════════════════════════════');
-    console.log('[DOMCapture] Running 23h DEG fallback job...');
+    console.log('[DOMCapture] Running 23h DPG fallback job...');
 
     const config = await getConfig();
     if (!config.autoCapture) {
-        console.log('[DOMCapture] Auto-capture is disabled. Skipping DEG fallback.');
+        console.log('[DOMCapture] Auto-capture is disabled. Skipping DPG fallback.');
         return;
     }
 
-    // Check if DEG report was already sent today (by regular 22h run or manual)
-    const alreadySent = await isDegReportSentToday();
+    // Check if DPG report was already sent today (by regular 22h run or manual)
+    const alreadySent = await isDpgReportSentToday();
     if (alreadySent) {
-        console.log('[DOMCapture] DEG report already sent today. Skipping 23h fallback.');
+        console.log('[DOMCapture] DPG report already sent today. Skipping 23h fallback.');
         await addCaptureLog('info', 'Báo cáo sản lượng đầu cực đã gửi hôm nay → bỏ qua 23h fallback');
         return;
     }
@@ -1465,46 +1484,46 @@ async function runDegFallbackJob() {
 
     if (result.success) {
         if (!isTestMode) {
-            await markDegReportSent();
+            await markDpgReportSent();
         }
-        console.log('[DOMCapture] ✅ DEG fallback at 23h succeeded!');
+        console.log('[DOMCapture] ✅ DPG fallback at 23h succeeded!');
         await addCaptureLog('success', `Báo cáo sản lượng đầu cực 23h thành công. ${result.serverResponse?.caption || ''}`);
     } else if (result.errorKind === 'timeout') {
         const outcome = result.lastSendOutcome;
         if (outcome && outcome.status === 'failed') {
-            // Server confirmed the DEG send FAILED → retry within the 23h window.
+            // Server confirmed the DPG send FAILED → retry within the 23h window.
             const now = new Date();
             if (now.getHours() === 23 && now.getMinutes() < 50) {
-                chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
-                await addCaptureLog('error', `DEG 23h: server xác nhận gửi THẤT BẠI. Retry sau 10 phút.`);
+                chrome.alarms.create('dom-capture-dpg-fallback', { when: Date.now() + 10 * 60000 });
+                await addCaptureLog('error', `DPG 23h: server xác nhận gửi THẤT BẠI. Retry sau 10 phút.`);
             } else {
-                await addCaptureLog('error', `DEG 23h: server xác nhận gửi THẤT BẠI. Hết cửa sổ retry trong ngày.`);
+                await addCaptureLog('error', `DPG 23h: server xác nhận gửi THẤT BẠI. Hết cửa sổ retry trong ngày.`);
             }
         } else {
-            // Unresolved / may have sent — mark DEG to avoid a second report (live only)
+            // Unresolved / may have sent — mark DPG to avoid a second report (live only)
             if (!isTestMode) {
-                await markDegReportSent();
+                await markDpgReportSent();
             }
-            await addCaptureLog('error', `DEG 23h timeout (có thể đã gửi). Đánh dấu đã gửi để tránh trùng.`);
+            await addCaptureLog('error', `DPG 23h timeout (có thể đã gửi). Đánh dấu đã gửi để tránh trùng.`);
         }
     } else if (result.errorKind === 'busy') {
         const now = new Date();
         if (now.getHours() === 23 && now.getMinutes() < 50) {
-            chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
-            await addCaptureLog('error', `DEG 23h: WhatsApp đang bận. Retry sau 10 phút.`);
+            chrome.alarms.create('dom-capture-dpg-fallback', { when: Date.now() + 10 * 60000 });
+            await addCaptureLog('error', `DPG 23h: WhatsApp đang bận. Retry sau 10 phút.`);
         } else {
-            await addCaptureLog('error', `DEG 23h: WhatsApp đang bận. Hết cửa sổ retry trong ngày.`);
+            await addCaptureLog('error', `DPG 23h: WhatsApp đang bận. Hết cửa sổ retry trong ngày.`);
         }
     } else if (result.errorKind === 'wa_disconnected' || result.errorKind === 'config') {
         const now = new Date();
         if (now.getHours() === 23 && now.getMinutes() < 50) {
-            chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
-            await addCaptureLog('error', `DEG 23h: ${result.error}. Retry sau 10 phút.`);
+            chrome.alarms.create('dom-capture-dpg-fallback', { when: Date.now() + 10 * 60000 });
+            await addCaptureLog('error', `DPG 23h: ${result.error}. Retry sau 10 phút.`);
         } else {
-            await addCaptureLog('error', `DEG 23h: ${result.error}. Cần kết nối WA / cấu hình rồi chạy lại thủ công.`);
+            await addCaptureLog('error', `DPG 23h: ${result.error}. Cần kết nối WA / cấu hình rồi chạy lại thủ công.`);
         }
     } else {
-        console.log(`[DOMCapture] ❌ DEG fallback at 23h failed: ${result.error}`);
+        console.log(`[DOMCapture] ❌ DPG fallback at 23h failed: ${result.error}`);
         await addCaptureLog('error', `Báo cáo sản lượng đầu cực 23h thất bại: ${result.error}`);
         if (result.missingSelectors && result.missingSelectors.length > 0) {
             await addCaptureLog('error', `Thiếu CSS selector cho: ${result.missingSelectors.join(', ')}. Đã TẮT chế độ tự động.`);
@@ -1524,14 +1543,14 @@ async function runDegFallbackJob() {
                 await saveConfig(currentConfig);
                 await chrome.storage.local.set({ networkFailCount: 0 });
             } else if (now.getHours() === 23 && now.getMinutes() < 50) {
-                chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
-                await addCaptureLog('error', `Không kết nối được server (${failCount}/3). Retry DEG sau 10 phút.`);
+                chrome.alarms.create('dom-capture-dpg-fallback', { when: Date.now() + 10 * 60000 });
+                await addCaptureLog('error', `Không kết nối được server (${failCount}/3). Retry DPG sau 10 phút.`);
             }
         } else {
             const now = new Date();
             if (now.getHours() === 23 && now.getMinutes() < 50) {
-                chrome.alarms.create('dom-capture-deg-fallback', { when: Date.now() + 10 * 60000 });
-                await addCaptureLog('error', `DEG fail — retry sau 10 phút.`);
+                chrome.alarms.create('dom-capture-dpg-fallback', { when: Date.now() + 10 * 60000 });
+                await addCaptureLog('error', `DPG fail — retry sau 10 phút.`);
             }
         }
     }
@@ -1581,12 +1600,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await chrome.alarms.clear('dom-capture-watchdog');
     }
 
-    if (alarm.name === 'dom-capture-deg-fallback') {
+    if (alarm.name === 'dom-capture-dpg-fallback' || alarm.name === 'dom-capture-deg-fallback') {
         chrome.alarms.create('dom-capture-watchdog', { delayInMinutes: 10 });
         try {
-            await runDegFallbackJob();
+            await runDpgFallbackJob();
         } catch (err) {
-            console.error('[DOMCapture] ❌ Unhandled error in DEG fallback job:', err);
+            console.error('[DOMCapture] ❌ Unhandled error in DPG fallback job:', err);
             await addCaptureLog('error', `Lỗi báo cáo sản lượng 23h: ${err.message}`);
         } finally {
             await chrome.alarms.clear('dom-capture-watchdog');
@@ -1600,7 +1619,7 @@ async function startScheduler() {
     if (!config.autoCapture) {
         console.log('[DOMCapture] Auto-capture disabled. Not scheduling.');
         await chrome.alarms.clear('dom-capture-scheduled');
-        await chrome.alarms.clear('dom-capture-deg-fallback');
+        await chrome.alarms.clear('dom-capture-dpg-fallback');
         await saveScheduleState({ status: 'disabled', nextRun: null, lastResult: null });
         return;
     }
@@ -1614,14 +1633,14 @@ async function startScheduler() {
     const intervalLabel = (config.intervalHours || 1) === 2 ? 'mỗi 2 giờ' : 'mỗi giờ';
     await addCaptureLog('info', `Scheduler started (${intervalLabel}, ${modeLabel}). First run at ${timeStr}`);
 
-    // Schedule DEG fallback if needed
-    await scheduleDegFallbackIfNeeded();
+    // Schedule DPG fallback if needed
+    await scheduleDpgFallbackIfNeeded();
 }
 
 // ─── Stop scheduling ───
 async function stopScheduler() {
     await chrome.alarms.clear('dom-capture-scheduled');
-    await chrome.alarms.clear('dom-capture-deg-fallback');
+    await chrome.alarms.clear('dom-capture-dpg-fallback');
     await chrome.alarms.clear('dom-capture-watchdog');
     await saveScheduleState({ status: 'disabled', nextRun: null, lastResult: null });
     await addCaptureLog('info', 'Scheduler stopped.');
@@ -1647,7 +1666,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
                 const currentHour = new Date().getHours();
                 if (!isTest && (currentHour === 22 || currentHour === 23)) {
-                    const alreadySent = await isDegReportSentToday();
+                    const alreadySent = await isDpgReportSentToday();
                     if (!alreadySent) {
                         force22h = true;
                     }
@@ -1659,8 +1678,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 });
                 if (result.success) {
                     if (force22h && !isTest) {
-                        await markDegReportSent();
-                        await chrome.alarms.clear('dom-capture-deg-fallback');
+                        await markDpgReportSent();
+                        await chrome.alarms.clear('dom-capture-dpg-fallback');
                     }
                     const dup = result.serverResponse?.duplicate;
                     const ack = result.serverResponse?.wa_ack;
@@ -1675,9 +1694,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     if (result.lastSendOutcome && result.lastSendOutcome.status === 'failed') {
                         await addCaptureLog('error', `Capture thủ công timeout — server xác nhận gửi THẤT BẠI (${result.lastSendOutcome.detail || 'không rõ'}).`);
                     } else if (force22h && !isTest) {
-                        await markDegReportSent();
-                        await chrome.alarms.clear('dom-capture-deg-fallback');
-                        await addCaptureLog('error', 'Capture thủ công timeout (có thể đã gửi). Đánh dấu DEG để tránh trùng.');
+                        await markDpgReportSent();
+                        await chrome.alarms.clear('dom-capture-dpg-fallback');
+                        await addCaptureLog('error', 'Capture thủ công timeout (có thể đã gửi). Đánh dấu DPG để tránh trùng.');
                     } else {
                         await addCaptureLog('error', 'Capture thủ công timeout (có thể đã gửi).');
                     }
@@ -1731,6 +1750,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     }
                 }
 
+                // Tương thích server cũ: mock DPG cũng gửi kèm DEG
+                if (mockData.DPG && !mockData.DEG) {
+                    mockData.DEG = mockData.DPG;
+                } else if (mockData.DEG && !mockData.DPG) {
+                    mockData.DPG = mockData.DEG;
+                }
                 const payload = {
                     timestamp: ts,
                     url: config.targetUrl || 'test-mode',
@@ -1754,7 +1779,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 });
 
                 if (result.success) {
-                    // Never mark DEG report sent for mock/test runs
+                    // Never mark DPG report sent for mock/test runs
                     await addCaptureLog('success', `Test thành công. Caption: ${result.serverResponse?.caption || ''}`);
                 } else {
                     await addCaptureLog('error', `Test thất bại: ${result.error}`);
