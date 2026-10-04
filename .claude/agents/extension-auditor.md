@@ -30,8 +30,9 @@ Bạn là chuyên gia review phía Chrome extension (Manifest V3) của tool scr
 - `background.js`: alarms, capture orchestration, pre-schedule, watchdog, pendingReload
 - Content script: `EXTRACT_DATA`, element picker, CSS selectors fragility
 - Freeze inject MAIN world (XHR/fetch/WS override) — side effects / restore
-- `popup.js`: config UI, TEST_SCENARIOS, schedule display, storage sync
-- Auto schedule: hourly / 2h / 22h DEG / 23h fallback / disable khi server down
+- `popup.js`: config UI, TEST_SCENARIOS, MI panel (manual_intervention), schedule display, storage sync
+- Auto schedule: hourly / 2h / 22h DPG / 23h fallback (`dpgReportDate`, alarm `dom-capture-dpg-fallback`) / disable khi server down
+- Idempotency: `capture_id` reuse + poll `last_send_outcome` qua `/api/status`
 - Message passing: popup ↔ background ↔ content reliability
 
 ## Input / output protocol

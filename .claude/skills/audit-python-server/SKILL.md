@@ -5,7 +5,7 @@ description: "Rà soát server.py Flask/Win32/WhatsApp của screenshot-whatsapp
 
 # Audit Python Server
 
-Hướng dẫn cách server-auditor tìm lỗi phía Python một cách có hệ thống. Static review vì repo không có pytest/CI — evidence từ mã nguồn phải đủ mạnh để tái hiện.
+Hướng dẫn cách server-auditor tìm lỗi phía Python một cách có hệ thống. Repo đã có pytest (`tests/`: `test_build_caption`, `test_caption_math`, `test_fault_character`, `test_mi_skip`) — chạy `python -m pytest tests/ -q` trước để nắm hành vi kỳ vọng, rồi static review phần chưa được cover.
 
 ## Why this skill
 
@@ -36,11 +36,11 @@ Focus HWND sai, lock không release khi exception, maximize/TopMost ảnh hưở
 
 ### Caption math
 
-Logic active / low-wind / F / M / DEG / TB1–TB12. Edge: thiếu key, parse fail, AWS ngưỡng, báo cáo 22h.
+Logic trong `caption_math.py`: M/F/low_wind suy từ TBS + công suất TB (KHÔNG còn F/M scrape; đã bỏ ngoại lệ AWS≥6); DPG (`parse_dpg_force22h`, chỉ bắt buộc khi `force_22h`); caption rút gọn khi 12 TB gió thấp; `manual_intervention` overrides. Edge: thiếu key, parse fail, số âm, báo cáo 22h/23h.
 
 ### WhatsApp reliability
 
-Session/token path, QR, gửi sau khi HTTP đã 200, exception trong thread không báo client, quit/kill browser.
+Session/token path, QR, `_send_whatsapp_image` qua `_send_executor` (timeout + hard ceiling), dedupe `capture_id`, `last_send_outcome` client poll qua `/api/status`, exception trong thread không báo client, quit/kill browser.
 
 ### Security / ops
 

@@ -218,7 +218,7 @@ def build_caption(
 
     - Khi is_all_low_wind (active==0 && low_wind==12 && m==0 && f==0):
       rút gọn, KHÔNG gửi `tốc độ gió` và `công suất phát`.
-    - DPG (Daily Power Production) vẫn được gắn nếu
+    - DPG (Daily Power Generation) vẫn được gắn nếu
       force_22h và dpg_display có giá trị (giữ hành vi 22h/23h cũ).
     - Áp dụng cho cả is_test và live (không phân biệt).
 

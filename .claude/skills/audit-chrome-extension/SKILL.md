@@ -34,7 +34,7 @@ State in-memory mất khi SW sleep. Pre-schedule / watchdog có đủ không. Jo
 
 ### Scheduler
 
-Hourly / 2h / 22h DEG / 23h fallback / random window. `chrome.alarms` vs `setTimeout`. Disable khi server down — có recover không.
+Hourly / 2h / 22h DPG / 23h fallback (`dpgReportDate`, alarm `dom-capture-dpg-fallback`) / random window. `chrome.alarms` vs `setTimeout`. Disable khi server down — có recover không. Idempotency: `capture_id` reuse + `last_send_outcome`.
 
 ### Scrape & freeze
 

@@ -2,7 +2,7 @@
 
 Yêu cầu:
 - Đúng 12 TB gió thấp (strict 12): active==0 && low_wind==12 && m==0 && f==0 → rút gọn, ẩn gió/công suất
-- Giữ DPG (Daily Power Production) cho 22h như cũ
+- Giữ DPG (Daily Power Generation) cho 22h như cũ
 - Áp dụng cho cả is_test (caption logic không phân biệt, test ở đây đảm bảo build_caption không phụ thuộc is_test)
 """
 import os

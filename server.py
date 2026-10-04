@@ -366,7 +366,7 @@ def parse_number(v):
 
 
 def parse_dpg_force22h(raw):
-    """Parse DPG (Daily Power Production) for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
+    """Parse DPG (Daily Power Generation) for force_22h reports; treat single-group thousands (e.g. 1.234) as 1234 MWh."""
     s = str(raw).strip().replace('\u2212', '-').replace('\u2013', '-').replace('\u2014', '-')
     s = re.sub(r'(?i)\s*(mw|mwh|m/s|tb|kwh|kw)\s*$', '', s).strip()
     s = re.sub(r'[^\d,.\-]', '', s)

@@ -329,7 +329,7 @@ async function saveScheduleState(state) {
     });
 }
 
-// ─── DPG Report (Daily Power Production — sản lượng đầu cực) daily tracking ───
+// ─── DPG Report (Daily Power Generation — sản lượng đầu cực) daily tracking ───
 
 /**
  * Get today's date string in YYYY-MM-DD format (local time).

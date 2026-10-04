@@ -33,7 +33,7 @@ Bạn là QA chuyên **cross-boundary comparison**. Không chỉ kiểm tra “c
 | Focus / status | extension fetch | `/api/focus`, `/api/status` |
 | Fields scrape→caption | content extract keys | caption builder expected keys |
 | Config | `config.json.example` + popup storage | `server.py` config load keys |
-| Success signal | HTTP 200 to extension | `send_whatsapp_async` outcome |
+| Success signal | HTTP 200 to extension | `_send_whatsapp_image` + `last_send_outcome` (poll `/api/status` theo `capture_id`) |
 
 Đọc checklist chi tiết: skill `audit-integration-boundaries` → `references/boundary-checklist.md`.
 
